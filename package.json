@@ -1,6 +1,6 @@
 {
   "name": "@setcd-io/server",
-  "version": "3.5.0-0",
+  "version": "3.5.0-1",
   "main": "server.ts",
   "scripts": {
     "dev": "tsx watch --clear-screen=false server/server.ts",
