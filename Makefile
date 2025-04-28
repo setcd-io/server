@@ -1,10 +1,4 @@
-TEMPDIR ?= /tmp
-GITHUB_ENV ?= $(TEMPDIR)/.env
-CERTDIR ?= $(shell pwd)/server/certs
-CERTFILE ?= localhost.crt
-KEYFILE ?= localhost.key
 KUBE_VERSION ?= 1.29.0
-ETCD_HOST ?= host.docker.internal
 CACHEDIR ?= .cache
 SERVE ?= dynamodb-local
 RUN ?= microsoft-etcd3
@@ -13,7 +7,7 @@ WHAT ?=
 logs:
 	@docker compose \
 		--project-directory $(PWD) \
-		--project-name tests \
+		--project-name setcd-io-server-tests \
 		logs \
 			--timestamps \
 			--no-log-prefix \
@@ -23,13 +17,13 @@ test: _checkout-$(RUN) _patch-$(RUN) _test-$(RUN)
 	@echo "Running tests for $(RUN) on $(SERVE)"
 	docker compose \
 		--project-directory $(PWD) \
-		--project-name tests \
+		--project-name setcd-io-server-tests \
 		down || true
 	docker compose \
 		--project-directory $(PWD) \
-		--project-name tests \
-		-f tests/docker-compose.$(SERVE).serve.yml \
-		-f tests/docker-compose.$(RUN).test.yml \
+		--project-name setcd-io-server-tests \
+		-f test/docker-compose.$(SERVE).serve.yml \
+		-f test/docker-compose.$(RUN).test.yml \
 		up \
 			--build \
 			--always-recreate-deps \
@@ -41,11 +35,11 @@ _checkout:
 	@mkdir -p $(CACHEDIR)
 
 patches:
-	@mkdir -p $(PWD)/tests/patches
-	git -C $(CACHEDIR)/$(RUN) diff > $(PWD)/tests/patches/$(SERVE)+$(RUN).diff
+	@mkdir -p $(PWD)/test/patches
+	git -C $(CACHEDIR)/$(RUN) diff > $(PWD)/test/patches/$(SERVE)+$(RUN).diff
 
 _patch:
-	@cp "$(PWD)/tests/patches/$(SERVE)+$(RUN).diff" "$(CACHEDIR)/$(RUN).diff"
+	@cp "$(PWD)/test/patches/$(SERVE)+$(RUN).diff" "$(CACHEDIR)/$(RUN).diff"
 	@cd $(CACHEDIR)/$(RUN) && \
 		git reset --hard && \
 		patch -p1 < ../$(RUN).diff
@@ -62,7 +56,7 @@ _test-dynamodb-remote:
 	echo "AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)" >> $(CACHEDIR)/$(SERVE).env
 	echo "AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)" >> $(CACHEDIR)/$(SERVE).env
 	echo "AWS_SESSION_TOKEN=$(AWS_SESSION_TOKEN)" >> $(CACHEDIR)/$(SERVE).env
-	echo "AWS_DYNAMODB_TABLE_ETCD__NAME=etcd-test-branch-$(USER)-$(BRANCH)" >> $(CACHEDIR)/$(SERVE).env
+	echo "AWS_DYNAMODB_TABLE_ETCD__NAME=setcd-io-server-$(USER)-$(BRANCH)-test" >> $(CACHEDIR)/$(SERVE).env
 
 _test-dynamodb-local:
 	echo "AWS_REGION=us-east-1" > $(CACHEDIR)/$(SERVE).env
@@ -70,7 +64,7 @@ _test-dynamodb-local:
 	echo "AWS_SECRET_ACCESS_KEY=DUMMYEXAMPLEKEY" >> $(CACHEDIR)/$(SERVE).env
 	echo "AWS_ENDPOINT_URL_DYNAMODB=http://ddb:8000" >> $(CACHEDIR)/$(SERVE).env
 	echo "AWS_ENDPOINT_URL_DYNAMODB_STREAMS=http://ddb:8000" >> $(CACHEDIR)/$(SERVE).env
-	echo "AWS_DYNAMODB_TABLE_ETCD__NAME=etcd" >> $(CACHEDIR)/$(SERVE).env
+	echo "AWS_DYNAMODB_TABLE_ETCD__NAME=setcd-io-server-test" >> $(CACHEDIR)/$(SERVE).env
 
 ### Microsoft etcd3 Tests ###
 _checkout-microsoft-etcd3: _checkout

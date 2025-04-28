@@ -2,8 +2,8 @@ name: Release
 
 on:
   workflow_dispatch:
-  push:
-    branches: [etcd-*]
+  # push:
+  #   branches: [etcd-*]
 
 permissions: write-all
 
@@ -24,8 +24,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: "npm"
-      - run: npm install
-      - run: npm run build
+      - run: yarn
+      - run: yarn build
       - if: ${{ matrix.node == '22' }}
         uses: scaffoldly/bump-version-action@v1
         with:

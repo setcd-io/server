@@ -1,21 +1,30 @@
 {
   "name": "@setcd-io/server",
   "version": "3.5.0-1",
-  "main": "server.ts",
+  "main": "src/server.ts",
+  "engines": {
+    "node": ">=20",
+    "yarn": ">=1.22.0",
+    "npm": "please-use-yarn"
+  },
+  "engineStrict": true,
   "scripts": {
-    "dev": "tsx watch --clear-screen=false server/server.ts",
-    "build:server": "tsup server/server.ts",
-    "build": "npm run build:server",
+    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "build:server": "tsup src/server.ts",
+    "build": "yarn build:server",
     "start:server": "node dist/server.js",
-    "start": "npm run build && node dist/server.js",
-    "package": "npm run build && pkg dist/server.js --compress Brotli --out-path dist --target node18-linuxstatic-x64,node18-linuxstatic-arm64"
+    "start": "yarn build && node dist/server.js",
+    "package": "yarn build && pkg dist/server.js --compress Brotli --out-path dist --target node18-linuxstatic-x64,node18-linuxstatic-arm64"
   },
   "keywords": [],
   "author": "Scaffoldly <https://github.com/scaffoldly>",
   "license": "SEE LICENSE IN LICENSE.md",
   "description": "",
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.726.1",
     "@aws-sdk/client-dynamodb-streams": "^3.726.1",
+    "@aws-sdk/lib-dynamodb": "3.x",
+    "@bufbuild/protobuf": "^2.2.0",
     "@connectrpc/connect": "^2.0.0",
     "@connectrpc/connect-fastify": "^2.0.0",
     "@connectrpc/connect-node": "^2.0.0",
@@ -27,7 +36,7 @@
     "@types/node": "^22.10.7",
     "@types/promise-retry": "^1.1.6",
     "@types/stream-buffers": "^3.0.7",
-    "axios": "^1.7.9",
+    "axios": "~1.7",
     "axios-http2-adapter": "^1.0.2",
     "blocked-at": "^1.2.0",
     "chalk": "^5.4.1",
@@ -58,7 +67,7 @@
       "arn::dynamodb:::table/etcd"
     ],
     "files": [
-      "server/certs",
+      "src/certs",
       "dist/server.js",
       "package.json"
     ],

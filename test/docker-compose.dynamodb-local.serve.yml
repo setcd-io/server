@@ -6,7 +6,7 @@ services:
   etcd:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: test/Dockerfile
     ports:
       - "2379:2379"
     depends_on:

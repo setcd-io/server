@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        serve: [dynamodb-local, dynamodb-remote, coreos-etcd]
+        serve: [coreos-etcd, dynamodb-local] #, dynamodb-remote]
         run: [microsoft-etcd3, kubernetes-etcd3] #, k3d]
     steps:
       - uses: actions/checkout@v4
@@ -31,12 +31,12 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.serve }}-${{ matrix.run }}-cache
           path: .cache
 
-      - name: Assume AWS Role
-        if: ${{ vars.AWS_ROLE_ARN }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: us-east-1
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+      # - name: Assume AWS Role
+      #   if: ${{ vars.AWS_ROLE_ARN }}
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-region: us-east-1
+      #     role-to-assume: ${{ vars.AWS_ROLE_ARN }}
 
       - name: Run Tests
         run: |

@@ -59,12 +59,12 @@ async function main(ctx: Context) {
     key: fs.readFileSync(
       process.env.CERTDIR && process.env.KEYFILE
         ? path.join(process.env.CERTDIR, process.env.KEYFILE)
-        : `server/certs/localhost.key`
+        : `src/certs/localhost.key`
     ),
     cert: fs.readFileSync(
       process.env.CERTDIR && process.env.CERTFILE
         ? path.join(process.env.CERTDIR, process.env.CERTFILE)
-        : `server/certs/localhost.crt`
+        : `src/certs/localhost.crt`
     ),
     allowHTTP1: true,
   };
