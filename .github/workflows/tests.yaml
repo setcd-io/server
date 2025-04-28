@@ -1,0 +1,104 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [etcd-*]
+  pull_request:
+    branches: [etcd-*]
+
+permissions: write-all
+
+env:
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        serve: [dynamodb-local, dynamodb-remote, coreos-etcd]
+        run: [microsoft-etcd3, kubernetes-etcd3] #, k3d]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ runner.os }}-${{ matrix.serve }}-${{ matrix.run }}-cache
+          path: .cache
+
+      - name: Assume AWS Role
+        if: ${{ vars.AWS_ROLE_ARN }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+
+      - name: Run Tests
+        run: |
+          make test SERVE=${{ matrix.serve }} RUN=${{ matrix.run }}
+
+      - name: Save Cache
+        id: cache-save
+        if: always() && steps.cache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+          path: .cache
+
+      - name: Capture Logs
+        if: always()
+        run: |
+          make logs SERVE=${{ matrix.serve }} RUN=${{ matrix.run }} &> ${{ runner.temp }}/logs.txt
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.run }}-${{ matrix.serve }}-logs
+          path: ${{ runner.temp }}/logs.txt
+
+  # conformance:
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       serve: [etcd, local]
+  #       run: [microsoft-etcd3, kube-etcd3] #, k3d]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+
+  #     - name: Prepare Environment
+  #       run: |
+  #         echo "TEMPDIR=${{ runner.temp }}" >> $GITHUB_ENV
+
+  #     - name: Prepare Tests
+  #       run: |
+  #         make pre-${{ matrix.run }} || true
+  #         make pre-${{ matrix.serve }} || true
+
+  #     - name: Start Backend
+  #       run: |
+  #         make serve-${{ matrix.serve }}
+
+  #     - name: Start Tests
+  #       run: |
+  #         make run-${{ matrix.run }}
+
+  #     - name: Stop Backend
+  #       if: always()
+  #       run: |
+  #         make stop
+
+  #     - name: Upload Server Logs
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: ${{ matrix.serve }}-${{ matrix.run }}-logs
+  #         path: ${{ runner.temp }}/logs.zip

@@ -1,0 +1,15 @@
+services:
+  ddb:
+    image: amazon/dynamodb-local:latest
+    ports:
+      - "8000:8000"
+  etcd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2379:2379"
+    depends_on:
+      - ddb
+    env_file:
+      - ./.cache/dynamodb-local.env

@@ -1,0 +1,22 @@
+services:
+  test:
+    depends_on:
+      - etcd
+    image: golang:1.21
+    network_mode: host
+    volumes:
+      - ./.cache/kubernetes-etcd3:/test
+      - ./.cache/go-mod:/go/pkg/mod
+      - ./.cache/go-build:/root/.cache/go-build
+    env_file:
+      - ./.cache/kubernetes-etcd3.env
+    environment:
+      - GOFLAGS=-buildvcs=false
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        cd /test && \
+          cd staging/src/k8s.io/apiserver/pkg/storage/etcd3 && \
+            go test -v -run "$$TESTS" -failfast

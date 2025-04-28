@@ -1,0 +1,13 @@
+{
+	"name": "Devcontainer",
+	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
+	"privileged": true,
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:1": {},
+		"ghcr.io/devcontainers/features/node:1":{},
+		"ghcr.io/devcontainers-extra/features/kubectl-asdf:2": {}
+	},
+	"remoteEnv": {
+		"LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
+	}
+}

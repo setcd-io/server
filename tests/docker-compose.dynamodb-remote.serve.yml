@@ -1,0 +1,9 @@
+services:
+  etcd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2379:2379"
+    env_file:
+      - ./.cache/dynamodb-remote.env
