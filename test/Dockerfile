@@ -1,4 +1,4 @@
-FROM node:18 AS build
+FROM node:20 AS build
 ENV NPX_CACHE=/cache/npx
 ENV PKG_CACHE_PATH=/cache/pkg
 WORKDIR /work
@@ -7,7 +7,7 @@ RUN yarn
 RUN yarn build
 
 # Final
-FROM node:18
+FROM node:20
 COPY --from=build /work/dist/server.js /server.js
 COPY src/certs/localhost.key /src/certs/localhost.key
 COPY src/certs/localhost.crt /src/certs/localhost.crt
