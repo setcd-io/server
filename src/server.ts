@@ -19,6 +19,7 @@ import { AuthHandler } from "./handlers/auth";
 import { nanoid } from "nanoid";
 import _ from "lodash";
 import { log } from "./util/log";
+import { version } from "../package.json";
 import {
   CONNECTION_ID,
   CONNECTION_TIMEOUT,
@@ -27,9 +28,8 @@ import {
   REQUEST_TIMEOUT,
   TENANT,
 } from "./util/const";
-import { Console } from "console";
-import Table from "cli-table3";
 
+const isVersion = process.argv.includes("--version");
 const isHttp2 = !process.argv.includes("--no-http2");
 const isLocal = !process.env.AWS_LAMBDA_RUNTIME_API;
 
@@ -53,6 +53,11 @@ const intercept: Interceptor = (next) => async (req) => {
 };
 
 async function main(ctx: Context) {
+  if (isVersion) {
+    console.log(version);
+    return;
+  }
+
   console.log("\nStarting Server...");
 
   let https: http2.SecureServerOptions | boolean = {

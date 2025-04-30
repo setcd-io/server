@@ -1,2 +1,8 @@
 .cache/
-tests/
+.github/
+.devcontainer/
+dist/
+node_modules/
+test/
+.dockerignore
+Dockerfile

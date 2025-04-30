@@ -1,7 +1,7 @@
 {
   "name": "@setcd-io/server",
   "version": "3.5.0-1",
-  "main": "src/server.ts",
+  "main": "dist/server.js",
   "engines": {
     "node": ">=20",
     "yarn": ">=1.22.0",
@@ -10,11 +10,11 @@
   "engineStrict": true,
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/server.ts",
-    "build:server": "tsup src/server.ts",
     "build": "yarn build:server",
+    "build:server": "tsup src/server.ts",
+    "build:exe": "yarn build && pkg dist/server.js --compress Brotli --output dist/server --targets node22-linuxstatic-x64,node22-linuxstatic-arm64",
     "start:server": "node dist/server.js",
-    "start": "yarn build && node dist/server.js",
-    "package": "yarn build && pkg dist/server.js --compress Brotli --out-path dist --target node18-linuxstatic-x64,node18-linuxstatic-arm64"
+    "start": "yarn build && node dist/server.js"
   },
   "keywords": [],
   "author": "Scaffoldly <https://github.com/scaffoldly>",
@@ -36,6 +36,7 @@
     "@types/node": "^22.10.7",
     "@types/promise-retry": "^1.1.6",
     "@types/stream-buffers": "^3.0.7",
+    "@yao-pkg/pkg": "^6.4.1",
     "axios": "~1.7",
     "axios-http2-adapter": "^1.0.2",
     "blocked-at": "^1.2.0",
@@ -50,7 +51,6 @@
     "nodemon": "^3.1.9",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
-    "pkg": "^5.8.1",
     "promise-retry": "^2.0.1",
     "rxjs": "^7.8.1",
     "stream-buffers": "^3.0.3",
