@@ -16,8 +16,11 @@ RUN ARCH=$(node -e "console.log(process.arch)") && \
     ./server --version
 
 FROM scratch
-COPY --from=reduce /work/server /server
-COPY src/certs/localhost.key /src/certs/localhost.key
-COPY src/certs/localhost.crt /src/certs/localhost.crt
-ENTRYPOINT [ "/server" ]
+COPY --from=reduce /work/server /usr/bin/server
+COPY --from=build /work/src/certs/localhost.crt /etc/ssl/certs/localhost.crt
+COPY --from=build /work/src/certs/localhost.key /etc/ssl/private/localhost.key
+ENV CERTDIR=/etc/ssl
+ENV CERTFILE=certs/localhost.crt
+ENV KEYFILE=private/localhost.key
+ENTRYPOINT [ "server" ]
 EXPOSE 2379
