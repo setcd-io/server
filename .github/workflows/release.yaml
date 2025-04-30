@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [etcd-*]
+    paths-ignore:
+      - .devcontainer/**
+      - .github/workflows/tests.yaml
+      - test/**
 
 permissions: write-all
 
