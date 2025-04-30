@@ -9,9 +9,6 @@ on:
 
 permissions: write-all
 
-env:
-  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -24,19 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: saml-to/assume-aws-role-action@v1
+        with:
+          role: ${{ vars.AWS_ROLE_ARN }}
+
       - name: Restore Cache
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
           key: ${{ runner.os }}-${{ matrix.serve }}-${{ matrix.run }}-cache
           path: .cache
-
-      # - name: Assume AWS Role
-      #   if: ${{ vars.AWS_ROLE_ARN }}
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     aws-region: us-east-1
-      #     role-to-assume: ${{ vars.AWS_ROLE_ARN }}
 
       - name: Run Tests
         run: |
