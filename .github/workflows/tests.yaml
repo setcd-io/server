@@ -15,6 +15,7 @@ concurrency:
 
 env:
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   test:
