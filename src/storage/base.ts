@@ -4,11 +4,20 @@ import { ulid } from "ulid";
 import { TableKey } from "ddb-table/lib/TableIndex";
 import { DynamoDBRecord } from "aws-lambda";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import { filter, map, Observable, OperatorFunction } from "rxjs";
+import {
+  filter,
+  firstValueFrom,
+  from,
+  map,
+  Observable,
+  OperatorFunction,
+  switchMap,
+} from "rxjs";
 import Context from "../context";
 import { serialize } from "./serde";
 import { Item } from "ddb-table/lib/DocumentClient";
 import { isEqual, last } from "lodash";
+import { DynamoDbProvider } from "../cloud-rx/dynamodb";
 
 export const KEY_SEPARATOR = "$";
 
@@ -117,24 +126,16 @@ class BaseTable<
   SkPrefix extends KeyPrefix
 > extends Table<T, "pk", "sk"> {
   constructor(
-    ctx: Context,
+    provider: DynamoDbProvider<"pk", "sk">,
     private pkPrefix: PkPrefix,
     private skPrefix: SkPrefix
   ) {
     super({
-      // No need to specify region or credentials
-      // It's all provided by the execution role
-      documentClient: ctx.documentClient,
-      tableName: ctx.tableName,
-      primaryKey: "pk",
-      sortKey: "sk",
+      documentClient: provider.documentClient,
+      tableName: provider.name,
+      primaryKey: provider.pk,
+      sortKey: provider.sk,
     });
-  }
-
-  public preventOverwrite(): ConditionExpression {
-    return {
-      ConditionExpression: `attribute_not_exists(${this.primaryKey}) AND attribute_not_exists(${this.sortKey})`,
-    };
   }
 
   public _pk(value: string = ""): string {
@@ -188,9 +189,9 @@ export abstract class TenantTable<
 
   constructor(protected ctx: Context, private skPrefix: SkPrefix) {}
 
-  table(
+  async table(
     tenant?: string | Partial<Keys>
-  ): BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T> {
+  ): Promise<BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>> {
     if (!tenant) {
       throw new Error("Tenant is required");
     }
@@ -211,30 +212,36 @@ export abstract class TenantTable<
         TenantIdentifiable<T>;
     }
 
-    const internal = new BaseTable<T, "tenant", SkPrefix>(
-      this.ctx,
-      "tenant",
-      this.skPrefix
-    ) as BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>;
+    return firstValueFrom(
+      this.ctx.storage.kv.pipe(
+        map((provider) => {
+          const internal = new BaseTable<T, "tenant", SkPrefix>(
+            provider,
+            "tenant",
+            this.skPrefix
+          ) as BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>;
 
-    internal.pk = () => internal._pk(tenant);
-    internal.sk = (value: string | Uint8Array | number) => {
-      let val: string;
-      if (value instanceof Uint8Array) {
-        val = serialize(value, "utf8", true);
-      } else {
-        val = `${value}`;
-      }
-      return internal._sk(val);
-    };
+          internal.pk = () => internal._pk(tenant);
+          internal.sk = (value: string | Uint8Array | number) => {
+            let val: string;
+            if (value instanceof Uint8Array) {
+              val = serialize(value, "utf8", true);
+            } else {
+              val = `${value}`;
+            }
+            return internal._sk(val);
+          };
 
-    const update = internal.update.bind(internal);
-    internal.rawUpdate = internal.update.bind(internal);
-    internal.update = (pk: string, sk: string) =>
-      update(pk, sk).set("tenant", tenant).set("serial", ulid());
+          const update = internal.update.bind(internal);
+          internal.rawUpdate = internal.update.bind(internal);
+          internal.update = (pk: string, sk: string) =>
+            update(pk, sk).set("tenant", tenant).set("serial", ulid());
 
-    this.tables[tenant] = internal;
-    return internal;
+          this.tables[tenant] = internal;
+          return internal;
+        })
+      )
+    );
   }
 
   mapRecord(): OperatorFunction<DynamoDBRecord, StreamRecord<T>> {
@@ -259,12 +266,15 @@ export abstract class TenantTable<
 
               return { keys, record };
             }),
-            filter(({ keys, record }) => {
+            switchMap(({ keys, record }) => {
+              return from(this.table(keys)).pipe(
+                map((table) => ({ table, keys, record }))
+              );
+            }),
+            filter(({ table, record }) => {
               const { dynamodb = {} } = record;
 
-              return (
-                !!dynamodb?.SequenceNumber && this.table(keys).isRecord(record)
-              );
+              return !!dynamodb?.SequenceNumber && table.isRecord(record);
             })
           )
           .pipe(
@@ -343,7 +353,7 @@ export class RevisionTable extends BaseTable<
   "tenant",
   "revision"
 > {
-  constructor(ctx: Context) {
-    super(ctx, "tenant", "revision");
+  constructor(provider: DynamoDbProvider<"pk", "sk">) {
+    super(provider, "tenant", "revision");
   }
 }

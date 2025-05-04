@@ -13,4 +13,4 @@ services:
       - ./.cache/microsoft-etcd3.env
     working_dir: /test
     command: >
-      sh -c "env && npm install && ./node_modules/.bin/mocha --verbose --bail --grep \"$$TESTS\""
+      sh -c "npm install && ./node_modules/.bin/mocha --verbose --bail --grep \"$$TESTS\""

@@ -7,8 +7,16 @@ import { Agent } from "https";
 import fs from "fs";
 import axios from "axios";
 import http2 from "http2-wrapper";
-import { TableMonitor } from "./storage/monitor";
-import { asyncScheduler, from, interval, lastValueFrom, switchMap } from "rxjs";
+// import { TableMonitor } from "./storage/monitor";
+import {
+  asyncScheduler,
+  combineLatest,
+  firstValueFrom,
+  from,
+  interval,
+  lastValueFrom,
+  switchMap,
+} from "rxjs";
 import { KVHandler } from "./handlers/kv";
 import { WatchHandler } from "./handlers/watch";
 import { LeaseHandler } from "./handlers/lease";
@@ -93,7 +101,7 @@ async function main(ctx: Context) {
         })
   ) as FastifyInstance;
 
-  const tableMonitor = new TableMonitor(ctx);
+  // const tableMonitor = new TableMonitor(ctx);
   const auth = new AuthHandler(ctx);
   const kv = new KVHandler(ctx);
   const lease = new LeaseHandler(ctx, kv);
@@ -101,8 +109,10 @@ async function main(ctx: Context) {
   const maintenance = new MaintenanceHandler(ctx);
   const cluster = new ClusterHandler(ctx);
 
-  const table = await lastValueFrom(tableMonitor.table$);
-  console.info("Table ARN:", table.TableArn);
+  console.table({
+    "KV Table ARN": (await lastValueFrom(ctx.storage.kv)).tableArn,
+    "History Table ARN": (await lastValueFrom(ctx.storage.history)).tableArn,
+  });
 
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });
 

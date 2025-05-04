@@ -27,6 +27,7 @@ import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { PersistentSubject } from "../cloud-rx";
+import { DynamoDbProvider } from "../cloud-rx/dynamodb";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -96,7 +97,9 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
 
   constructor(ctx: Context) {
     super(ctx, "kv");
+
     this.history = new PersistentSubject<TenantHistory>(
+      ctx.storage.history,
       { bufferSize: HISTORY_SIZE },
       {
         signal: ctx.signal,
@@ -128,7 +131,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       expires?: number;
     }
   ): Promise<{ current: KVSchema; previous?: KVSchema }> {
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
 
     let current: KVSchema = {
       pk: table.pk(),
@@ -247,7 +250,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       revision = await this.ctx.nextRevision(tenant);
     }
 
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
 
     const item = await this.expire(tenant, table.pk(), table.sk(key), revision);
 
@@ -260,7 +263,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     sk: string,
     revision: number
   ): Promise<KVSchema | undefined> {
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
 
     const value = serialize(new Uint8Array(0), "base64", true);
     const version = 0;
@@ -321,7 +324,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     more: boolean;
     _q: QueryCommandInput;
   }> {
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
     const { key, rangeEnd } = rangeRequest;
 
     if (!key || !rangeEnd) {
@@ -466,7 +469,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   }
 
   async leased(tenant: string, leaseId: number): Promise<KVSchema[]> {
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
     const { Items: items } = await table
       .query()
       .keyCondition((c) =>
@@ -636,7 +639,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   }
 
   async all(tenant: string, key?: Uint8Array | string): Promise<KVSchema[]> {
-    const table = this.table(tenant);
+    const table = await this.table(tenant);
     const { Items: items } = await table
       .query()
       .keyCondition((c) =>
@@ -664,6 +667,8 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     if (key instanceof Uint8Array) {
       key = serialize(key, "utf8", true);
     }
+
+    const foo = this.history.pipe();
 
     const all = await lastValueFrom(
       this.history.pipe(

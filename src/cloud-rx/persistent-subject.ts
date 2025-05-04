@@ -21,17 +21,21 @@ import {
   concatMap,
   mergeMap,
   share,
+  Observer,
+  Operator,
 } from "rxjs";
-
-export interface Expireable {
-  expires?: number; // In seconds
-}
+import { Provider } from "./provider";
 
 const timestampProvider: TimestampProvider = {
   now: () => Date.now(),
 };
 
+export interface Expireable {
+  expires?: number; // In seconds
+}
+
 export class PersistentSubject<T extends Expireable> extends Subject<T> {
+  private provider: Observable<Provider<unknown>>;
   private _expired: Subject<T> = new Subject<T>();
   private _incoming: Subject<T> = new Subject<T>();
   private _buffer: ReplaySubject<T>;
@@ -42,6 +46,7 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
   public readonly expired = this._expired.pipe(share());
 
   constructor(
+    provider: Observable<Provider<unknown>>,
     config: {
       bufferSize?: number;
       windowTime?: number;
@@ -53,6 +58,7 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
     }
   ) {
     super();
+    this.provider = provider;
 
     this._buffer = new ReplaySubject<T>(
       config.bufferSize || Infinity,
@@ -73,9 +79,10 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
       });
     }
 
-    this.subscriptions.push(this.setup());
-    this.subscribe = this._buffer.subscribe.bind(this._buffer);
     this.pipe = this._buffer.pipe.bind(this._buffer);
+    this.subscribe = this._buffer.subscribe.bind(this._buffer);
+
+    this.init();
   }
 
   private isExpired(value: T): boolean {
@@ -86,31 +93,24 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
     return false;
   }
 
-  private setup(): Subscription {
-    return from(this.backfill())
+  private init(): void {
+    this.provider
       .pipe(
         map(() => {
-          const incoming = this._incoming.pipe(this.persist()).subscribe({
-            next: (value) => {
-              if (!this.isExpired(value)) {
-                this._buffer.next(value);
-              }
-            },
-            error: (err) => this.error(err),
-            complete: () => this.complete(),
-          });
-
-          return incoming;
+          this.subscriptions.push(
+            this._incoming.pipe(this.persist()).subscribe({
+              next: (value) => {
+                if (!this.isExpired(value)) {
+                  this._buffer.next(value);
+                }
+              },
+              error: (err) => this.error(err),
+              complete: () => this.complete(),
+            })
+          );
         })
       )
-      .subscribe((incoming) => this.subscriptions.push(incoming));
-  }
-
-  private backfill(): Observable<undefined> {
-    console.log("!!! TODO BACKFILL !!!");
-    // TODO: re-emit everthing in the buffer
-    // TODO: preset expired delays
-    return of(undefined).pipe();
+      .subscribe();
   }
 
   private persist(): OperatorFunction<T, T> {
@@ -155,11 +155,11 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
     };
   }
 
-  next(value: T): void {
+  override next(value: T): void {
     this._incoming.next(value);
   }
 
-  complete(): void {
+  override complete(): void {
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._buffer.complete();
@@ -167,7 +167,7 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
     super.complete();
   }
 
-  unsubscribe(): void {
+  override unsubscribe(): void {
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._buffer.unsubscribe();
@@ -175,11 +175,97 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
     super.unsubscribe();
   }
 
-  error(err: any): void {
+  override error(err: any): void {
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._buffer.error(err);
     this._incoming.error(err);
     super.error(err);
   }
+
+  // override pipe(): Observable<T>;
+  // override pipe<A>(op1: OperatorFunction<T, A>): Observable<A>;
+  // override pipe<A, B>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>
+  // ): Observable<B>;
+  // override pipe<A, B, C>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>
+  // ): Observable<C>;
+  // override pipe<A, B, C, D>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>
+  // ): Observable<D>;
+  // override pipe<A, B, C, D, E>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>
+  // ): Observable<E>;
+  // override pipe<A, B, C, D, E, F>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>,
+  //   op6: OperatorFunction<E, F>
+  // ): Observable<F>;
+  // override pipe<A, B, C, D, E, F, G>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>,
+  //   op6: OperatorFunction<E, F>,
+  //   op7: OperatorFunction<F, G>
+  // ): Observable<G>;
+  // override pipe<A, B, C, D, E, F, G, H>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>,
+  //   op6: OperatorFunction<E, F>,
+  //   op7: OperatorFunction<F, G>,
+  //   op8: OperatorFunction<G, H>
+  // ): Observable<H>;
+  // override pipe<A, B, C, D, E, F, G, H, I>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>,
+  //   op6: OperatorFunction<E, F>,
+  //   op7: OperatorFunction<F, G>,
+  //   op8: OperatorFunction<G, H>,
+  //   op9: OperatorFunction<H, I>
+  // ): Observable<I>;
+  // override pipe<A, B, C, D, E, F, G, H, I>(
+  //   op1: OperatorFunction<T, A>,
+  //   op2: OperatorFunction<A, B>,
+  //   op3: OperatorFunction<B, C>,
+  //   op4: OperatorFunction<C, D>,
+  //   op5: OperatorFunction<D, E>,
+  //   op6: OperatorFunction<E, F>,
+  //   op7: OperatorFunction<F, G>,
+  //   op8: OperatorFunction<G, H>,
+  //   op9: OperatorFunction<H, I>,
+  //   ...operations: OperatorFunction<any, any>[]
+  // ): Observable<unknown>;
+
+  // override pipe(...operations: OperatorFunction<any, any>[]): Observable<any> {
+  //   const injected: OperatorFunction<any, any>[] = [
+  //     concatMap((v: any) => this.provider.init().pipe(map(() => v))),
+  //   ];
+
+  //   return (this._buffer.pipe as Function).apply(this._buffer, [
+  //     ...injected,
+  //     ...operations,
+  //   ]) as Observable<any>;
+  // }
 }

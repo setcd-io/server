@@ -13,6 +13,8 @@ import { DynamoDBStreamsClient } from "@aws-sdk/client-dynamodb-streams";
 import EventEmitter from "events";
 import { RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
+import { DynamoDbProvider } from "./cloud-rx/dynamodb";
+import { Observable } from "rxjs";
 
 type ContextOpts = {
   logger?: Logger;
@@ -43,42 +45,29 @@ class Context
 
   private readonly logger?: Logger;
   private readonly _abort: AbortController;
-  public readonly tableName: string;
-  public readonly ddbClient: DynamoDBClient;
-  public readonly documentClient: DynamoDBDocument;
-  public readonly streamsClient: DynamoDBStreamsClient;
-  public readonly unmarshalOptions: unmarshallOptions = {
-    convertWithoutMapWrapper: false,
-    wrapNumbers: (value) => parseInt(value, 10),
-  };
   private revisions: RevisionTable;
+
+  public readonly storage: {
+    kv: Observable<DynamoDbProvider<"pk", "sk">>;
+    history: Observable<DynamoDbProvider<"pk", "sk">>;
+  };
 
   constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
-    this.tableName = opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!;
 
-    this.ddbClient = Context.default
-      ? Context.default?.ddbClient
-      : new DynamoDBClient({ logger: this.logger });
-    this.documentClient = Context.default
-      ? Context.default?.documentClient
-      : DynamoDBDocument.from(this.ddbClient, {
-          // unmarshallOptions: this.unmarshalOptions,
-        });
-    this.streamsClient = Context.default
-      ? Context.default.streamsClient
-      : new DynamoDBStreamsClient({ logger: this.logger });
+    const provider: DynamoDbProvider<"pk", "sk"> = new DynamoDbProvider(
+      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
+      { signal: this.signal }
+    );
 
-    this.revisions = new RevisionTable(this);
+    this.revisions = new RevisionTable(provider);
 
-    // const { stop: blockStop } = blocked((time, stack, resource) => {
-    //   console.log(`Blocked for ${time}ms, operation started here:`, {
-    //     resource,
-    //     stack,
-    //   });
-    // });
+    this.storage = {
+      kv: provider.init(),
+      history: provider.init("history"),
+    };
 
     this.on("abort", ({ reason, ctx }) => {
       let context: string | AbortContext | undefined = ctx;
@@ -97,8 +86,6 @@ class Context
       } else {
         console.warn(`Abort Triggered: ${reason}`);
       }
-
-      // blockStop();
       this._abort.abort(reason);
     });
 
@@ -119,6 +106,13 @@ class Context
     process.on("unhandledRejection", (reason, promise) => {
       this.abort("Unhandled Rejection", { reason, promise }, -1);
     });
+  }
+
+  get unmarshalOptions(): unmarshallOptions {
+    return {
+      convertWithoutMapWrapper: false,
+      wrapNumbers: (value) => parseInt(value, 10),
+    };
   }
 
   get signal() {
