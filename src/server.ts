@@ -4,7 +4,7 @@ import { fastifyConnectPlugin } from "@connectrpc/connect-fastify";
 import { createRouter } from "./routes";
 import { Code, ConnectError, Interceptor } from "@connectrpc/connect";
 import { Agent } from "https";
-import fs from "fs";
+import fs, { read } from "fs";
 import axios from "axios";
 import http2 from "http2-wrapper";
 // import { TableMonitor } from "./storage/monitor";
@@ -22,7 +22,7 @@ import { WatchHandler } from "./handlers/watch";
 import { LeaseHandler } from "./handlers/lease";
 import { MaintenanceHandler } from "./handlers/maintenance";
 import { ClusterHandler } from "./handlers/cluster";
-import path from "path";
+import path, { join } from "path";
 import { AuthHandler } from "./handlers/auth";
 import { nanoid } from "nanoid";
 import _ from "lodash";
@@ -37,6 +37,7 @@ import {
   TENANT,
 } from "./util/const";
 
+const isStatus = process.argv.slice(-1)[0] === "status";
 const isVersion = process.argv.includes("--version");
 const isHttp2 = !process.argv.includes("--no-http2");
 const isLocal = !process.env.AWS_LAMBDA_RUNTIME_API;
@@ -62,23 +63,21 @@ const intercept: Interceptor = (next) => async (req) => {
 
 async function main(ctx: Context) {
   if (isVersion) {
-    console.log(version);
+    await ctx.version();
+    return;
+  }
+
+  if (isStatus) {
+    await ctx.status();
     return;
   }
 
   console.log("\nStarting Server...");
 
   let https: http2.SecureServerOptions | boolean = {
-    key: fs.readFileSync(
-      process.env.CERTDIR && process.env.KEYFILE
-        ? path.join(process.env.CERTDIR, process.env.KEYFILE)
-        : `src/certs/localhost.key`
-    ),
-    cert: fs.readFileSync(
-      process.env.CERTDIR && process.env.CERTFILE
-        ? path.join(process.env.CERTDIR, process.env.CERTFILE)
-        : `src/certs/localhost.crt`
-    ),
+    key: await ctx.keyfile(),
+    cert: await ctx.certfile(),
+    ca: await ctx.certfile(),
     allowHTTP1: true,
   };
 
@@ -110,8 +109,9 @@ async function main(ctx: Context) {
   const cluster = new ClusterHandler(ctx);
 
   console.table({
-    "KV Table ARN": (await lastValueFrom(ctx.storage.kv)).tableArn,
-    "History Table ARN": (await lastValueFrom(ctx.storage.history)).tableArn,
+    "KV Table": (await lastValueFrom(ctx.kvStorage.init())).repr(),
+    "Revision Table": (await lastValueFrom(ctx.revisionStorage.init())).repr(),
+    "History Table": (await lastValueFrom(ctx.historyStorage.init())).repr(),
   });
 
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });

@@ -2,19 +2,19 @@ import dotenv from "dotenv";
 import dotenvExpand from "dotenv-expand";
 dotenvExpand.expand(dotenv.config());
 
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import {
-  DynamoDBDocument,
-  marshallOptions,
-  unmarshallOptions,
-} from "@aws-sdk/lib-dynamodb";
-import { Logger } from "pino";
-import { DynamoDBStreamsClient } from "@aws-sdk/client-dynamodb-streams";
+import { Etcd3 } from "etcd3";
+import { unmarshallOptions } from "@aws-sdk/lib-dynamodb";
+import { Logger, P } from "pino";
 import EventEmitter from "events";
-import { RevisionTable } from "./storage/base";
+import { BaseSchema, RevisionSchema, RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
 import { DynamoDbProvider } from "./cloud-rx/dynamodb";
-import { Observable } from "rxjs";
+import { TenantHistory } from "./storage/kv";
+import { deserialize, serialize } from "./storage/serde";
+import { name, version } from "../package.json";
+import _ from "lodash";
+import { join } from "path";
+import { readFileSync } from "fs";
 
 type ContextOpts = {
   logger?: Logger;
@@ -45,29 +45,70 @@ class Context
 
   private readonly logger?: Logger;
   private readonly _abort: AbortController;
-  private revisions: RevisionTable;
 
-  public readonly storage: {
-    kv: Observable<DynamoDbProvider<"pk", "sk">>;
-    history: Observable<DynamoDbProvider<"pk", "sk">>;
-  };
+  public readonly kvStorage: DynamoDbProvider<BaseSchema>;
+  public readonly revisionStorage: DynamoDbProvider<BaseSchema>;
+  public readonly historyStorage: DynamoDbProvider<TenantHistory>;
+
+  private revisions: RevisionTable;
 
   constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
 
-    const provider: DynamoDbProvider<"pk", "sk"> = new DynamoDbProvider(
+    this.kvStorage = new DynamoDbProvider<BaseSchema>(
       opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
-      { signal: this.signal }
-    );
+      {
+        signal: this.signal,
+        hashKey: "pk",
+        rangeKey: "sk",
+        serializer: {
+          serialize: (value: BaseSchema) => JSON.stringify(value),
+          deserialize: (value: string) => JSON.parse(value),
+        },
+      }
+    ).withId("kv");
 
-    this.revisions = new RevisionTable(provider);
+    this.revisionStorage = new DynamoDbProvider<BaseSchema>(
+      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
+      {
+        signal: this.signal,
+        hashKey: "pk",
+        rangeKey: "sk",
+        serializer: {
+          serialize: (value: BaseSchema) => JSON.stringify(value),
+          deserialize: (value: string) => JSON.parse(value),
+        },
+      }
+    ).withId("revision");
 
-    this.storage = {
-      kv: provider.init(),
-      history: provider.init("history"),
-    };
+    this.historyStorage = new DynamoDbProvider<TenantHistory>(
+      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
+      {
+        signal: this.signal,
+        hashKey: "serial",
+        rangeKey: "source",
+        serializer: {
+          serialize: (value: TenantHistory) =>
+            JSON.stringify({
+              ..._.cloneDeep(value),
+              current: serialize(value.current, "base64", true),
+              previous: serialize(value.previous, "base64", false),
+            }),
+          deserialize: (value: string) => {
+            const item = JSON.parse(value);
+            return {
+              ...item,
+              current: deserialize(item.current, true),
+              previous: deserialize(item.previous, false),
+            };
+          },
+        },
+      }
+    ).withId("history");
+
+    this.revisions = new RevisionTable(this.revisionStorage);
 
     this.on("abort", ({ reason, ctx }) => {
       let context: string | AbortContext | undefined = ctx;
@@ -276,6 +317,41 @@ class Context
       ctx: abort.ctx,
       code,
     });
+  }
+
+  async version(): Promise<void> {
+    console.log(`${name} v${version}`);
+  }
+
+  async status(): Promise<void> {
+    const client = new Etcd3({
+      hosts: ["https://127.0.0.1:2379"],
+      credentials: {
+        rootCertificate: await this.certfile(),
+        certChain: await this.certfile(),
+        privateKey: await this.keyfile(),
+      },
+    });
+
+    const status = await client.maintenance.status();
+
+    console.table(status);
+  }
+
+  async certfile(): Promise<Buffer> {
+    return readFileSync(
+      process.env.CERTDIR && process.env.CERTFILE
+        ? join(process.env.CERTDIR, process.env.CERTFILE)
+        : `src/certs/localhost.crt`
+    );
+  }
+
+  async keyfile(): Promise<Buffer> {
+    return readFileSync(
+      process.env.CERTDIR && process.env.KEYFILE
+        ? join(process.env.CERTDIR, process.env.KEYFILE)
+        : `src/certs/localhost.key`
+    );
   }
 }
 

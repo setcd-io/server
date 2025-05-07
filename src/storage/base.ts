@@ -8,6 +8,7 @@ import {
   filter,
   firstValueFrom,
   from,
+  lastValueFrom,
   map,
   Observable,
   OperatorFunction,
@@ -18,6 +19,7 @@ import { serialize } from "./serde";
 import { Item } from "ddb-table/lib/DocumentClient";
 import { isEqual, last } from "lodash";
 import { DynamoDbProvider } from "../cloud-rx/dynamodb";
+import { Expireable } from "../cloud-rx/provider";
 
 export const KEY_SEPARATOR = "$";
 
@@ -126,15 +128,15 @@ class BaseTable<
   SkPrefix extends KeyPrefix
 > extends Table<T, "pk", "sk"> {
   constructor(
-    provider: DynamoDbProvider<"pk", "sk">,
+    provider: DynamoDbProvider<BaseSchema>,
     private pkPrefix: PkPrefix,
     private skPrefix: SkPrefix
   ) {
     super({
       documentClient: provider.documentClient,
-      tableName: provider.name,
-      primaryKey: provider.pk,
-      sortKey: provider.sk,
+      tableName: provider.tableName,
+      primaryKey: "pk",
+      sortKey: "sk",
     });
   }
 
@@ -212,36 +214,30 @@ export abstract class TenantTable<
         TenantIdentifiable<T>;
     }
 
-    return firstValueFrom(
-      this.ctx.storage.kv.pipe(
-        map((provider) => {
-          const internal = new BaseTable<T, "tenant", SkPrefix>(
-            provider,
-            "tenant",
-            this.skPrefix
-          ) as BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>;
+    const internal = new BaseTable<T, "tenant", SkPrefix>(
+      this.ctx.kvStorage,
+      "tenant",
+      this.skPrefix
+    ) as BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>;
 
-          internal.pk = () => internal._pk(tenant);
-          internal.sk = (value: string | Uint8Array | number) => {
-            let val: string;
-            if (value instanceof Uint8Array) {
-              val = serialize(value, "utf8", true);
-            } else {
-              val = `${value}`;
-            }
-            return internal._sk(val);
-          };
+    internal.pk = () => internal._pk(tenant);
+    internal.sk = (value: string | Uint8Array | number) => {
+      let val: string;
+      if (value instanceof Uint8Array) {
+        val = serialize(value, "utf8", true);
+      } else {
+        val = `${value}`;
+      }
+      return internal._sk(val);
+    };
 
-          const update = internal.update.bind(internal);
-          internal.rawUpdate = internal.update.bind(internal);
-          internal.update = (pk: string, sk: string) =>
-            update(pk, sk).set("tenant", tenant).set("serial", ulid());
+    const update = internal.update.bind(internal);
+    internal.rawUpdate = internal.update.bind(internal);
+    internal.update = (pk: string, sk: string) =>
+      update(pk, sk).set("tenant", tenant).set("serial", ulid());
 
-          this.tables[tenant] = internal;
-          return internal;
-        })
-      )
-    );
+    this.tables[tenant] = internal;
+    return internal;
   }
 
   mapRecord(): OperatorFunction<DynamoDBRecord, StreamRecord<T>> {
@@ -340,7 +336,7 @@ export abstract class TenantTable<
   }
 }
 
-type RevisionSchema = BaseSchema & {
+export type RevisionSchema = BaseSchema & {
   tenant: string;
   revision: number;
   minRevision?: number;
@@ -353,7 +349,7 @@ export class RevisionTable extends BaseTable<
   "tenant",
   "revision"
 > {
-  constructor(provider: DynamoDbProvider<"pk", "sk">) {
+  constructor(provider: DynamoDbProvider<BaseSchema>) {
     super(provider, "tenant", "revision");
   }
 }

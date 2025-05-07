@@ -7,55 +7,200 @@ import {
   TimeToLiveDescription,
   UpdateTimeToLiveCommand,
 } from "@aws-sdk/client-dynamodb";
-import { DynamoDBStreamsClient } from "@aws-sdk/client-dynamodb-streams";
+import {
+  DescribeStreamCommand,
+  DynamoDBStreamsClient,
+  GetRecordsCommand,
+  GetShardIteratorCommand,
+} from "@aws-sdk/client-dynamodb-streams";
 import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
   asyncScheduler,
   catchError,
+  concatMap,
   defer,
+  delayWhen,
+  EMPTY,
+  expand,
+  filter,
+  firstValueFrom,
   forkJoin,
+  from,
   fromEvent,
+  lastValueFrom,
   map,
   Observable,
   of,
+  share,
   switchMap,
   takeUntil,
   throwError,
   timer,
 } from "rxjs";
-import { Provider } from "../provider";
+import {
+  Consistency,
+  Expireable,
+  Provider,
+  Serializer,
+  Stored,
+} from "../provider";
 import { FatalError, RetryError } from "./errors";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
 
-export type Options<Pk extends string, Sk extends String> = {
+export type Options<T> = {
   signal: AbortSignal;
-  pk?: Pk;
-  sk?: Sk;
+  serializer: Serializer<T>;
+  hashKey: string;
+  rangeKey: string;
   region?: string;
 };
 
-export class DynamoDbProvider<
-  Pk extends string,
-  Sk extends string
-> extends Provider<DynamoDbProvider<Pk, Sk>> {
+export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
   public readonly client: DynamoDBClient;
   public readonly documentClient: DynamoDBDocument;
   public readonly streamClient: DynamoDBStreamsClient;
   private _tableArn?: string;
   private _streamArn?: string;
 
-  constructor(public readonly name: string, private opts: Options<Pk, Sk>) {
-    super(opts.signal);
-    this.client = new DynamoDBClient({ region: this.opts.region });
+  constructor(tableName: string, private opts: Options<T>) {
+    super(tableName, opts.serializer, opts.signal);
+    this.client = new DynamoDBClient({
+      region: this.opts.region,
+      // logger: console,
+    });
     this.documentClient = DynamoDBDocument.from(this.client);
-    this.streamClient = new DynamoDBStreamsClient({ region: this.opts.region });
+    this.streamClient = new DynamoDBStreamsClient({
+      region: this.opts.region,
+      // logger: console,
+    });
   }
 
-  get pk(): Pk {
-    return this.opts.pk || ("pk" as Pk);
+  init(): Observable<this> {
+    return this.table.pipe(
+      map(({ tableArn, streamArn }) => {
+        this._tableArn = tableArn;
+        this._streamArn = streamArn;
+        return this;
+      })
+    );
   }
 
-  get sk(): Sk {
-    return this.opts.sk || ("sk" as Sk);
+  get tableName(): string {
+    return `${this.id}`;
+  }
+
+  protected async put(item: Stored): Promise<Stored> {
+    return this.documentClient
+      .put({
+        Item: item,
+        TableName: this.tableName,
+      })
+      .then(() => item);
+  }
+
+  protected async get(
+    serial: string,
+    source: string,
+    consistency: Consistency
+  ): Promise<Stored> {
+    return this.documentClient
+      .get({
+        Key: { serial, source },
+        TableName: this.tableName,
+        ConsistentRead: consistency !== "none",
+      })
+      .then((res) => res.Item as Stored);
+  }
+
+  protected oldest(): Promise<Stored> {
+    throw new Error("Method not implemented.");
+  }
+
+  protected newest(): Promise<Stored> {
+    throw new Error("Method not implemented.");
+  }
+
+  protected all(): Promise<Stored[]> {
+    throw new Error("Method not implemented.");
+  }
+
+  protected stream(since: Date): Observable<Stored> {
+    return from(
+      this.streamClient.send(
+        new DescribeStreamCommand({ StreamArn: this.streamArn })
+      )
+    )
+      .pipe(
+        map(({ StreamDescription = {} }) => StreamDescription.Shards),
+        map((shards) => shards || []),
+        filter((shards) => !!shards.length),
+        concatMap((shards) => from(shards)),
+        switchMap((shard) =>
+          from(
+            this.streamClient.send(
+              new GetShardIteratorCommand({
+                ShardId: shard.ShardId!,
+                StreamArn: this.streamArn,
+                SequenceNumber:
+                  shard.SequenceNumberRange?.StartingSequenceNumber,
+                ShardIteratorType: "AT_SEQUENCE_NUMBER",
+              })
+            )
+          ).pipe(
+            map(({ ShardIterator }) => ShardIterator),
+            filter((ShardIterator) => !!ShardIterator),
+            switchMap((ShardIterator) =>
+              from(
+                this.streamClient.send(new GetRecordsCommand({ ShardIterator }))
+              ).pipe(
+                expand(({ Records, NextShardIterator }) => {
+                  if (!NextShardIterator) {
+                    return EMPTY;
+                  }
+                  return of(null).pipe(
+                    delayWhen(() =>
+                      timer(Records?.length ? 0 : 1000, asyncScheduler)
+                    ),
+                    switchMap(() =>
+                      from(
+                        this.streamClient.send(
+                          new GetRecordsCommand({
+                            ShardIterator: NextShardIterator,
+                          })
+                        )
+                      )
+                    )
+                  );
+                })
+              )
+            ),
+            concatMap(({ Records }) => from(Records || [])),
+            filter(({ dynamodb = {} }) => {
+              return (
+                !!dynamodb.ApproximateCreationDateTime &&
+                dynamodb.ApproximateCreationDateTime >= since
+              );
+            })
+          )
+        )
+      )
+      .pipe(
+        map(({ eventName, dynamodb = {} }) => ({
+          NewImage: dynamodb.NewImage,
+          OldImage: dynamodb.OldImage,
+          EventName: eventName,
+        })),
+        filter(({ NewImage, OldImage, EventName }) => {
+          if (EventName === "REMOVE") {
+            // TODO: Consider how to handle REMOVE events with Expires
+            return false;
+          }
+          return true;
+        }),
+        map(({ NewImage }) => NewImage),
+        filter((NewImage) => !!NewImage),
+        map((item) => unmarshall(item) as Stored)
+      );
   }
 
   get tableArn(): string {
@@ -76,33 +221,6 @@ export class DynamoDbProvider<
     return this._streamArn;
   }
 
-  init(id?: string): Observable<DynamoDbProvider<Pk, Sk>> {
-    const provider = id
-      ? new DynamoDbProvider(`${this.name}-${id}`, this.opts)
-      : this;
-
-    return provider.table.pipe(
-      map((res) => {
-        provider._tableArn = res.tableArn;
-        provider._streamArn = res.streamArn;
-        return provider;
-      })
-    );
-  }
-
-  withKeys<DesiredPk extends Pk, DesiredSk extends Sk>(
-    pk: DesiredPk,
-    sk: DesiredSk
-  ): DynamoDbProvider<DesiredPk, DesiredSk> {
-    const options: Options<DesiredPk, DesiredSk> = {
-      ...this.opts,
-      pk,
-      sk,
-    };
-    this.opts = options;
-    return this as unknown as DynamoDbProvider<DesiredPk, DesiredSk>;
-  }
-
   private get table(): Observable<{
     tableArn: string;
     streamArn: string;
@@ -116,11 +234,14 @@ export class DynamoDbProvider<
 
     const describe$ = defer(() =>
       forkJoin([
-        this.client.send(new DescribeTableCommand({ TableName: this.name }), {
-          abortSignal: this.signal,
-        }),
         this.client.send(
-          new DescribeTimeToLiveCommand({ TableName: this.name }),
+          new DescribeTableCommand({ TableName: this.tableName }),
+          {
+            abortSignal: this.signal,
+          }
+        ),
+        this.client.send(
+          new DescribeTimeToLiveCommand({ TableName: this.tableName }),
           {
             abortSignal: this.signal,
           }
@@ -137,14 +258,14 @@ export class DynamoDbProvider<
       forkJoin([
         this.client.send(
           new CreateTableCommand({
-            TableName: this.name,
+            TableName: this.tableName,
             KeySchema: [
-              { AttributeName: this.pk, KeyType: "HASH" },
-              { AttributeName: this.sk, KeyType: "RANGE" },
+              { AttributeName: this.opts.hashKey, KeyType: "HASH" },
+              { AttributeName: this.opts.rangeKey, KeyType: "RANGE" },
             ],
             AttributeDefinitions: [
-              { AttributeName: this.pk, AttributeType: "S" },
-              { AttributeName: this.sk, AttributeType: "S" },
+              { AttributeName: this.opts.hashKey, AttributeType: "S" },
+              { AttributeName: this.opts.rangeKey, AttributeType: "S" },
             ],
             BillingMode: "PAY_PER_REQUEST",
             StreamSpecification: {
@@ -158,7 +279,7 @@ export class DynamoDbProvider<
         ),
         this.client.send(
           new UpdateTimeToLiveCommand({
-            TableName: this.name,
+            TableName: this.tableName,
             TimeToLiveSpecification: {
               AttributeName: "expires",
               Enabled: true,
@@ -214,33 +335,54 @@ export class DynamoDbProvider<
 
       if (
         table.KeySchema?.find(
-          (key) => key.KeyType === "HASH" && key.AttributeName !== this.pk
+          (key) =>
+            key.KeyType === "HASH" && key.AttributeName !== this.opts.hashKey
         )
       ) {
-        throw new FatalError(`Hash key needs to be named ${this.pk}`);
+        throw new FatalError(
+          `Hash key does not match desired name of \`${
+            this.opts.hashKey
+          }\`: ${JSON.stringify(table.KeySchema)}`
+        );
       }
       if (
         table.KeySchema?.find(
-          (key) => key.KeyType === "RANGE" && key.AttributeName !== this.sk
+          (key) =>
+            key.KeyType === "RANGE" && key.AttributeName !== this.opts.rangeKey
         )
       ) {
-        throw new FatalError(`Range key needs to be named ${this.sk}`);
+        throw new FatalError(
+          `Range key does not match desired name of \`${
+            this.opts.rangeKey
+          }\`: ${JSON.stringify(table.KeySchema)}`
+        );
       }
 
       if (
         table.AttributeDefinitions?.find(
-          (key) => key.AttributeName === this.pk && key.AttributeType !== "S"
+          (key) =>
+            key.AttributeName === this.opts.hashKey && key.AttributeType !== "S"
         )
       ) {
-        throw new FatalError(`Hash needs to be a string type`);
+        throw new FatalError(
+          `Hash Key needs to be a string type: ${JSON.stringify(
+            table.AttributeDefinitions
+          )}`
+        );
       }
 
       if (
         table.AttributeDefinitions?.find(
-          (key) => key.AttributeName === this.sk && key.AttributeType !== "S"
+          (key) =>
+            key.AttributeName === this.opts.rangeKey &&
+            key.AttributeType !== "S"
         )
       ) {
-        throw new FatalError(`Hash needs to be a string type`);
+        throw new FatalError(
+          `Range Key needs to be a string type: ${JSON.stringify(
+            table.AttributeDefinitions
+          )}`
+        );
       }
 
       if (
@@ -248,7 +390,9 @@ export class DynamoDbProvider<
           (key) => key.AttributeName === "expires" && key.AttributeType !== "N"
         )
       ) {
-        throw new FatalError(`Table neesd a TTL attribute of type number`);
+        throw new FatalError(
+          `Table neesd a TTL attribute named "expires" of type number`
+        );
       }
 
       if (table.StreamSpecification?.StreamEnabled !== true) {
@@ -300,10 +444,19 @@ export class DynamoDbProvider<
       );
 
     return check(0).pipe(
+      catchError((err) =>
+        throwError(
+          () => new Error(`Unable to use \`${this.tableName}\`: ${err.message}`)
+        )
+      ),
       map(({ table }) => ({
         tableArn: table.TableArn!,
         streamArn: table.LatestStreamArn!,
       }))
     );
+  }
+
+  repr(): string {
+    return `CloudRxDdb{ table=${this.tableName}, hash=${this.opts.hashKey}, range=${this.opts.rangeKey} }`;
   }
 }

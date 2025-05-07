@@ -1,3 +1,4 @@
+version: "3.8"
 services:
   ddb:
     image: amazon/dynamodb-local:latest
@@ -7,8 +8,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Use the JS Build for local execution
+      target: full
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "etcdctl",
+          "endpoint",
+          "status",
+          "--cacert=/certs/localhost.crt",
+          "--cert=/certs/localhost.crt",
+          "--key=/certs/localhost.key",
+        ]
+      interval: 1s
+      retries: 60
     ports:
       - "2379:2379"
+    volumes:
+      - ./src/certs:/certs
     depends_on:
       - ddb
     env_file:

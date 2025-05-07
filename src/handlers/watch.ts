@@ -26,30 +26,20 @@ import {
   OperatorFunction,
   switchMap,
   takeWhile,
+  tap,
   toArray,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
-import { TenantHistory } from "../storage/kv";
 import Table from "cli-table3";
 import util from "util";
 import _ from "lodash";
-import { nanoid } from "nanoid";
-
-const cancelRequest = (watchId: bigint): WatchRequest => ({
-  $typeName: "etcdserverpb.WatchRequest",
-  requestUnion: {
-    case: "cancelRequest",
-    value: {
-      $typeName: "etcdserverpb.WatchCancelRequest",
-      watchId,
-    },
-  },
-});
+import { TenantHistory } from "../storage/kv";
 
 type Watch = WatchCreateRequest & {
   tenant: string;
   connectionId: string;
+  requestId: string;
   createdAt: Date;
   cancelReason?: string;
 };
@@ -62,7 +52,11 @@ type Stats = {
   };
 };
 
-const isWatched = (watch: Watch, kv?: KeyValue): boolean => {
+const isWatched = (watch: Watch, requestId: string, kv?: KeyValue): boolean => {
+  if (watch.requestId !== requestId) {
+    return false;
+  }
+
   const key = serialize(kv?.key, "utf8", false);
   if (!key) {
     return false;
@@ -179,14 +173,29 @@ export class WatchHandler extends BaseHandler {
         },
       },
       {
-        requestToResponse: (tenant, connectionId, signal) => {
-          return this.mapRequestToResponse(tenant, connectionId, signal);
+        requestToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapRequestToResponse(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
         },
-        historyToResponse: (tenant, connectionId, signal) => {
-          return this.mapHistoryToResponse(tenant, connectionId, signal);
+        historyToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapHistoryToResponse(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
         },
-        errorToRequest: (tenant, connectionId, signal) => {
-          return this.mapErrorToRequest(tenant, connectionId, signal);
+        errorToRequest: (tenant, connectionId, requestId, signal) => {
+          return this.mapErrorToRequest(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
         },
       },
       {
@@ -213,6 +222,7 @@ export class WatchHandler extends BaseHandler {
               ..._.cloneDeep(res.request.requestUnion.value),
               tenant,
               connectionId,
+              requestId: res.requestId,
               watchId: res.response.watchId,
               createdAt: new Date(),
               progressNotify: false,
@@ -236,34 +246,10 @@ export class WatchHandler extends BaseHandler {
     );
   }
 
-  private async history(
-    tenant: string,
-    req: Partial<RangeRequest>
-  ): Promise<Event[]> {
-    const events = await this.kv.kv
-      .range(tenant, req)
-      .then(({ kvs }) =>
-        Promise.all(kvs.map((kv) => this.kv.kv.latest(kv.tenant, kv.key)))
-      )
-      .then((histories) => histories.filter((h) => !!h))
-      .then((histories) => {
-        return histories.map(({ current, previous, action }) => {
-          const event: Event = {
-            $typeName: "mvccpb.Event",
-            type:
-              action === "PUT" ? Event_EventType.PUT : Event_EventType.DELETE,
-            kv: current,
-            prevKv: previous,
-          };
-          return event;
-        });
-      });
-    return events;
-  }
-
   mapRequestToResponse(
     tenant: string,
     connectionId: string,
+    requestId: string,
     signal: AbortSignal
   ): OperatorFunction<
     WatchRequest,
@@ -307,6 +293,7 @@ export class WatchHandler extends BaseHandler {
                         return {
                           tenant,
                           connectionId,
+                          requestId,
                           request: source,
                           response,
                           signal,
@@ -339,6 +326,7 @@ export class WatchHandler extends BaseHandler {
                           return {
                             tenant,
                             connectionId,
+                            requestId,
                             request: source,
                             response,
                             signal,
@@ -409,6 +397,7 @@ export class WatchHandler extends BaseHandler {
   mapHistoryToResponse(
     tenant: string,
     connectionId: string,
+    requestId: string,
     signal: AbortSignal
   ): OperatorFunction<
     TenantHistory[],
@@ -428,7 +417,9 @@ export class WatchHandler extends BaseHandler {
                     const watchers = [
                       ...(this.watches.get(tenant)?.values() || []),
                     ]
-                      .filter((watch) => isWatched(watch, history.current))
+                      .filter((watch) =>
+                        isWatched(watch, requestId, history.current)
+                      )
                       .map((watch) => ({ watch, history }));
 
                     return from(watchers);
@@ -446,12 +437,20 @@ export class WatchHandler extends BaseHandler {
                         return {
                           watchId: group$.key,
                           watch,
-                          histories: histories.filter(
-                            (history) =>
-                              watch?.startRevision === 0n ||
-                              history.current.modRevision >=
+                          histories: histories.filter((history) => {
+                            if (
+                              history.previous &&
+                              history.previous.modRevision <
                                 watch?.startRevision!
-                          ),
+                            ) {
+                              return false;
+                            }
+
+                            return (
+                              history.current.modRevision >=
+                              watch?.startRevision!
+                            );
+                          }),
                         };
                       })
                     )
@@ -466,6 +465,7 @@ export class WatchHandler extends BaseHandler {
                     > = {
                       tenant,
                       connectionId,
+                      requestId,
                       signal,
                       request: {
                         $typeName: "etcdserverpb.WatchRequest",
@@ -524,6 +524,7 @@ export class WatchHandler extends BaseHandler {
   mapErrorToRequest(
     tenant: string,
     connectionId: string,
+    requestId: string,
     signal: AbortSignal
   ): OperatorFunction<Error, WatchRequest> {
     return (source: Observable<Error>): Observable<WatchRequest> => {

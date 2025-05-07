@@ -12,7 +12,6 @@ import {
   concatMap,
   filter,
   lastValueFrom,
-  map,
   Observable,
   share,
   switchMap,
@@ -27,7 +26,6 @@ import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { PersistentSubject } from "../cloud-rx";
-import { DynamoDbProvider } from "../cloud-rx/dynamodb";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -99,7 +97,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     super(ctx, "kv");
 
     this.history = new PersistentSubject<TenantHistory>(
-      ctx.storage.history,
+      ctx.historyStorage,
       { bufferSize: HISTORY_SIZE },
       {
         signal: ctx.signal,
@@ -109,6 +107,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     this.history$ = this.history.pipe(
       windowTime(HISTORY_TIMEOUT, asyncScheduler),
       concatMap((window) => window.pipe(toArray())),
+      filter((history) => !!history.length),
       share()
     );
 

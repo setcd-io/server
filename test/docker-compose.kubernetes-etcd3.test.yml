@@ -1,7 +1,8 @@
 services:
   test:
     depends_on:
-      - etcd
+      etcd:
+        condition: service_healthy
     image: golang:1.21
     network_mode: host
     volumes:

@@ -1,44 +1,32 @@
 import {
   ReplaySubject,
   asyncScheduler,
-  filter,
-  Observable,
-  OperatorFunction,
-  SchedulerLike,
   Subject,
-  Subscriber,
   Subscription,
   timer,
   TimestampProvider,
-  observeOn,
-  tap,
-  from,
   map,
-  of,
   switchMap,
-  windowTime,
-  toArray,
-  concatMap,
-  mergeMap,
   share,
-  Observer,
-  Operator,
+  observeOn,
+  filter,
 } from "rxjs";
-import { Provider } from "./provider";
-
-const timestampProvider: TimestampProvider = {
-  now: () => Date.now(),
-};
-
-export interface Expireable {
-  expires?: number; // In seconds
-}
+import {
+  Consistency,
+  Expireable,
+  Provider,
+  timestampProvider,
+} from "./provider";
+import _ from "lodash";
 
 export class PersistentSubject<T extends Expireable> extends Subject<T> {
-  private provider: Observable<Provider<unknown>>;
+  public readonly provider: Provider<T>;
+  private consistency: Consistency;
   private _expired: Subject<T> = new Subject<T>();
   private _incoming: Subject<T> = new Subject<T>();
   private _buffer: ReplaySubject<T>;
+
+  private incoming$ = this._incoming.pipe(observeOn(asyncScheduler), share());
   private timestampProvider: TimestampProvider;
   private signal: AbortSignal | undefined;
   private subscriptions: Subscription[] = [];
@@ -46,19 +34,21 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
   public readonly expired = this._expired.pipe(share());
 
   constructor(
-    provider: Observable<Provider<unknown>>,
-    config: {
+    provider: Provider<T>,
+    private readonly config: {
       bufferSize?: number;
       windowTime?: number;
     },
-    opts?: {
+    private readonly opts?: {
       signal?: AbortSignal;
-      scheduler?: SchedulerLike;
       timestampProvider?: TimestampProvider;
+      consistency?: Consistency;
     }
   ) {
     super();
-    this.provider = provider;
+    this.provider = provider.withTimestampProvider(
+      opts?.timestampProvider || timestampProvider
+    );
 
     this._buffer = new ReplaySubject<T>(
       config.bufferSize || Infinity,
@@ -79,80 +69,43 @@ export class PersistentSubject<T extends Expireable> extends Subject<T> {
       });
     }
 
-    this.pipe = this._buffer.pipe.bind(this._buffer);
-    this.subscribe = this._buffer.subscribe.bind(this._buffer);
-
-    this.init();
-  }
-
-  private isExpired(value: T): boolean {
-    if (value.expires) {
-      const now = this.timestampProvider.now();
-      return value.expires < now;
+    if (opts?.consistency) {
+      this.consistency = opts.consistency;
+    } else {
+      this.consistency = "weak"; // TODO: make strong
     }
-    return false;
-  }
 
-  private init(): void {
-    this.provider
-      .pipe(
-        map(() => {
-          this.subscriptions.push(
-            this._incoming.pipe(this.persist()).subscribe({
-              next: (value) => {
-                if (!this.isExpired(value)) {
-                  this._buffer.next(value);
-                }
-              },
-              error: (err) => this.error(err),
-              complete: () => this.complete(),
-            })
-          );
+    this.pipe = this._buffer.pipe.bind(this._buffer);
+    this.subscribe = this._buffer.subscribe.bind(this._buffer); // TODO this should start up a DDB stream
+
+    this.subscriptions.push(
+      this.incoming$
+        .pipe(switchMap((value) => provider.persist(value, this.consistency))) // TODO: make strong
+        .subscribe({
+          next: (value) => this._buffer.next(value),
+          error: (err) => this.error(err),
+          complete: () => this.complete(),
         })
-      )
-      .subscribe();
-  }
+    );
 
-  private persist(): OperatorFunction<T, T> {
-    return (source: Observable<T>): Observable<T> => {
-      return new Observable<T>((subscriber) => {
-        const subscription = source
-          .pipe(
-            // TODO: Write to DynamoDB
-            // TODO: Wait for item to come in from DDB Stream before emitting
-            switchMap((value) => {
-              if (!value.expires) {
-                return of([value]);
-              }
-              const now = this.timestampProvider.now();
-              const expires = Math.max(0, value.expires * 1000 - now);
-              const delayed = timer(expires, asyncScheduler).pipe(
-                map(() => {
-                  this._expired.next(value);
-                  return value;
-                })
-              );
-              return of(from([value]), delayed);
-            })
-          )
-          .pipe(mergeMap((sources) => from(sources)))
-          .subscribe({
-            next(source) {
-              subscriber.next(source);
-            },
-            error(err) {
-              subscriber.error(err);
-            },
-            complete() {
-              subscriber.complete();
-            },
-          });
-
-        return () => {
-          subscription.unsubscribe();
-        };
-      });
-    };
+    this.subscriptions.push(
+      this._buffer
+        .pipe(
+          filter((value) => !!value.expires),
+          switchMap((value) => {
+            value = _.cloneDeep(value);
+            const now = this.timestampProvider.now();
+            const expires = Math.max(0, value.expires! * 1000 - now);
+            return timer(expires, asyncScheduler).pipe(map(() => value));
+          })
+        )
+        .pipe(switchMap((value) => provider.expire(value, this.consistency)))
+        .subscribe({
+          next: (value) => this._expired.next(value),
+          error: (err) => this.error(err),
+          complete: () => this.complete(),
+        })
+    );
   }
 
   override next(value: T): void {

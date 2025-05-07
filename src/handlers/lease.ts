@@ -142,8 +142,13 @@ export class LeaseHandler extends BaseHandler {
         response: (res) => res.tenant === this.getTenant(ctx),
       },
       {
-        requestToResponse: (tenant, connectionId, signal) => {
-          return this.mapRequestToResponse(tenant, connectionId, signal);
+        requestToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapRequestToResponse(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
         },
       },
       {
@@ -163,6 +168,7 @@ export class LeaseHandler extends BaseHandler {
   mapRequestToResponse(
     tenant: string,
     connectionId: string,
+    requestId: string,
     signal: AbortSignal
   ): OperatorFunction<
     LeaseKeepAliveRequest,
@@ -215,6 +221,7 @@ export class LeaseHandler extends BaseHandler {
               > = {
                 tenant,
                 connectionId,
+                requestId,
                 request: source,
                 response: keepAlive,
                 signal,
