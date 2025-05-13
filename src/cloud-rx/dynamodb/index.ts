@@ -46,6 +46,7 @@ import {
 } from "../provider";
 import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
+import chalk from "chalk";
 
 export type Options<T> = {
   signal: AbortSignal;
@@ -99,13 +100,12 @@ export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
   }
 
   protected async get(
-    serial: string,
-    source: string,
+    flake: string,
     consistency: Consistency
   ): Promise<Stored> {
     return this.documentClient
       .get({
-        Key: { serial, source },
+        Key: { id: this.id, flake },
         TableName: this.tableName,
         ConsistentRead: consistency !== "none",
       })
@@ -124,7 +124,8 @@ export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
     throw new Error("Method not implemented.");
   }
 
-  protected stream(since: Date): Observable<Stored> {
+  protected stream(): Observable<Stored> {
+    // TODO: Periodically describe stream to check for new shards
     return from(
       this.streamClient.send(
         new DescribeStreamCommand({ StreamArn: this.streamArn })
@@ -174,13 +175,7 @@ export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
                 })
               )
             ),
-            concatMap(({ Records }) => from(Records || [])),
-            filter(({ dynamodb = {} }) => {
-              return (
-                !!dynamodb.ApproximateCreationDateTime &&
-                dynamodb.ApproximateCreationDateTime >= since
-              );
-            })
+            concatMap(({ Records }) => from(Records || []))
           )
         )
       )
@@ -309,16 +304,23 @@ export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
         throw new FatalError("Aborted");
       }
 
-      if (error && error.code === "ECONNREFUSED") {
-        throw new RetryError("Connection refused");
-      }
+      if (error) {
+        console.warn(chalk.yellow(`WARN: ${error.name}: ${error.message}`));
 
-      if (error && error.name === "ResourceNotFoundException") {
-        throw new RetryError("Resource not found");
-      }
+        if (error.code === "ECONNREFUSED") {
+          throw new RetryError("Connection refused");
+        }
+        if (error.name === "ResourceNotFoundException") {
+          throw new RetryError("Resource not found");
+        }
+        if (error.name === "ResourceInUseException") {
+          throw new RetryError("Resource in use");
+        }
+        if (error.name === "ValidationException") {
+          throw new RetryError("Validation error");
+        }
 
-      if (error && error.name === "ResourceInUseException") {
-        throw new RetryError("Resource in use");
+        throw new FatalError(`${error.name}: ${error.message}`);
       }
 
       if (!table || !ttl) {

@@ -4,9 +4,18 @@ services:
       context: .
       dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD", "server", "status"]
+      test:
+        [
+          "CMD",
+          "etcdctl",
+          "endpoint",
+          "status",
+          "--cacert=/certs/localhost.crt",
+          "--cert=/certs/localhost.crt",
+          "--key=/certs/localhost.key",
+        ]
       interval: 1s
-      retries: 1000
+      retries: 60
     ports:
       - "2379:2379"
     volumes:

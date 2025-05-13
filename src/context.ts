@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import dotenvExpand from "dotenv-expand";
 dotenvExpand.expand(dotenv.config());
 
-import { Etcd3 } from "etcd3";
+// import { Etcd3 } from "etcd3";
 import { unmarshallOptions } from "@aws-sdk/lib-dynamodb";
 import { Logger, P } from "pino";
 import EventEmitter from "events";
@@ -64,6 +64,7 @@ class Context
         hashKey: "pk",
         rangeKey: "sk",
         serializer: {
+          hash: (value: BaseSchema) => `${value.pk}:${value.sk}`,
           serialize: (value: BaseSchema) => JSON.stringify(value),
           deserialize: (value: string) => JSON.parse(value),
         },
@@ -77,6 +78,7 @@ class Context
         hashKey: "pk",
         rangeKey: "sk",
         serializer: {
+          hash: (value: BaseSchema) => `${value.pk}:${value.sk}`,
           serialize: (value: BaseSchema) => JSON.stringify(value),
           deserialize: (value: string) => JSON.parse(value),
         },
@@ -87,9 +89,11 @@ class Context
       opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
       {
         signal: this.signal,
-        hashKey: "serial",
-        rangeKey: "source",
+        hashKey: "id",
+        rangeKey: "flake",
         serializer: {
+          hash: (value: TenantHistory) =>
+            `${value.tenant}:${serialize(value.current.key, "base64", true)}`,
           serialize: (value: TenantHistory) =>
             JSON.stringify({
               ..._.cloneDeep(value),
@@ -323,20 +327,20 @@ class Context
     console.log(`${name} v${version}`);
   }
 
-  async status(): Promise<void> {
-    const client = new Etcd3({
-      hosts: ["https://127.0.0.1:2379"],
-      credentials: {
-        rootCertificate: await this.certfile(),
-        certChain: await this.certfile(),
-        privateKey: await this.keyfile(),
-      },
-    });
+  // async status(): Promise<void> {
+  //   const client = new Etcd3({
+  //     hosts: ["https://127.0.0.1:2379"],
+  //     credentials: {
+  //       rootCertificate: await this.certfile(),
+  //       certChain: await this.certfile(),
+  //       privateKey: await this.keyfile(),
+  //     },
+  //   });
 
-    const status = await client.maintenance.status();
+  //   const status = await client.maintenance.status();
 
-    console.table(status);
-  }
+  //   console.table(status);
+  // }
 
   async certfile(): Promise<Buffer> {
     return readFileSync(

@@ -67,10 +67,10 @@ async function main(ctx: Context) {
     return;
   }
 
-  if (isStatus) {
-    await ctx.status();
-    return;
-  }
+  // if (isStatus) {
+  //   await ctx.status();
+  //   return;
+  // }
 
   console.log("\nStarting Server...");
 

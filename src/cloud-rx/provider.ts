@@ -15,43 +15,39 @@ import {
 } from "rxjs";
 import { ulid } from "ulid";
 import util from "util";
+import { random } from "timeflake";
+import { Timeflake } from "timeflake/dist/timeflake";
+import { BN } from "bn.js";
 
 export type Expireable = {
   expires?: number; // In seconds
 };
 
 export type Stored = {
-  serial: string;
-  source: string;
-  expires?: number;
+  id: string;
+  flake: string;
+  hash: string;
   data: string;
+  expires?: number;
 };
 
 export type Consistency = "strong" | "weak" | "none";
 
-export const timestampProvider: TimestampProvider = {
-  now: () => Date.now(),
-};
-
 export interface Serializer<T> {
+  hash: (value: T) => string;
   serialize: (value: T) => string;
   deserialize: (value: string) => T;
 }
 
-export abstract class Provider<T extends Expireable> {
-  private timestampProvider: TimestampProvider = timestampProvider;
-
+export abstract class Provider<T> implements TimestampProvider {
   constructor(
     protected id: string,
     protected serializer: Serializer<T>,
     protected signal: AbortSignal
   ) {}
 
-  public withTimestampProvider(
-    timestampProvider: TimestampProvider
-  ): Provider<T> {
-    this.timestampProvider = timestampProvider;
-    return this;
+  now(): number {
+    throw new Error("Method not implemented.");
   }
 
   public withId(id: string): this {
@@ -69,14 +65,6 @@ export abstract class Provider<T extends Expireable> {
     return this.serializer.deserialize(value);
   }
 
-  private isExpired(value: Stored): boolean {
-    if (!!value.expires) {
-      const now = this.timestampProvider.now();
-      return value.expires < now;
-    }
-    return false;
-  }
-
   protected abstract oldest(): Promise<Stored>;
 
   protected abstract newest(): Promise<Stored>;
@@ -86,41 +74,38 @@ export abstract class Provider<T extends Expireable> {
   protected abstract put(item: Stored): Promise<Stored>;
 
   protected abstract get(
-    sequence: string,
-    source: string,
+    flake: string,
     consistency: Consistency
   ): Promise<Stored>;
 
-  protected abstract stream(since: Date): Observable<Stored>;
+  protected abstract stream(): Observable<Stored>;
 
   public persist(data: T, consistency: Consistency = "strong"): Observable<T> {
     return of({
-      serial: ulid(), // Lexicographically sortable
-      source: this.id,
+      id: this.id,
+      flake: random().base62,
+      hash: this.serializer.hash(data),
       data: this.serializer.serialize(data),
-      expires: data.expires,
+      // expires: data.expires,
     } as Stored).pipe(
       switchMap((item) => this.put(item)),
       switchMap((stored) => {
         if (consistency === "none") {
           return of(stored);
         } else if (consistency === "weak") {
-          return from(this.get(stored.serial, stored.source, "weak"));
+          return from(this.get(stored.flake, "weak"));
         } else {
           return forkJoin([
-            this.stream(new Date(this.timestampProvider.now())).pipe(
-              observeOn(asyncScheduler)
-            ),
-            from(this.get(stored.serial, stored.source, "weak")).pipe(
+            this.stream().pipe(observeOn(asyncScheduler)),
+            from(this.get(stored.flake, "weak")).pipe(
               observeOn(asyncScheduler)
             ),
           ]).pipe(
             filter(
               ([streamed, stored]) =>
-                streamed.serial === stored.serial &&
-                streamed.source === stored.source
+                streamed.id === this.id && streamed.flake === stored.flake
             ),
-            map(([_, stored]) => stored)
+            map(([streamed]) => streamed)
           );
         }
       }),

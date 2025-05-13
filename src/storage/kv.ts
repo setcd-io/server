@@ -111,12 +111,12 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       share()
     );
 
-    const expiration = this.history.expired
-      .pipe(switchMap((h) => this.deleteKey(h.tenant, h.current.key)))
-      .subscribe();
+    // const expiration = this.history.expired
+    //   .pipe(switchMap((h) => this.deleteKey(h.tenant, h.current.key)))
+    //   .subscribe();
 
     ctx.on("abort", () => {
-      expiration.unsubscribe();
+      // expiration.unsubscribe();
     });
   }
 
