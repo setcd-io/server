@@ -12,38 +12,29 @@ import {
   DynamoDBStreamsClient,
   GetRecordsCommand,
   GetShardIteratorCommand,
+  Shard,
 } from "@aws-sdk/client-dynamodb-streams";
 import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
   asyncScheduler,
   catchError,
-  concatMap,
   defer,
-  delayWhen,
   EMPTY,
   expand,
-  filter,
-  firstValueFrom,
   forkJoin,
   from,
   fromEvent,
-  lastValueFrom,
   map,
+  mergeAll,
+  mergeMap,
   Observable,
   of,
-  share,
   switchMap,
   takeUntil,
   throwError,
   timer,
 } from "rxjs";
-import {
-  Consistency,
-  Expireable,
-  Provider,
-  Serializer,
-  Stored,
-} from "../provider";
+import { Consistency, Provider, Serializer, Stored } from "../provider";
 import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
@@ -56,7 +47,7 @@ export type Options<T> = {
   region?: string;
 };
 
-export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
+export class DynamoDbProvider<T> extends Provider<T> {
   public readonly client: DynamoDBClient;
   public readonly documentClient: DynamoDBDocument;
   public readonly streamClient: DynamoDBStreamsClient;
@@ -112,90 +103,86 @@ export class DynamoDbProvider<T extends Expireable> extends Provider<T> {
       .then((res) => res.Item as Stored);
   }
 
-  protected oldest(): Promise<Stored> {
-    throw new Error("Method not implemented.");
+  public latest(): Observable<Stored> {
+    throw new Error("Latest not implemented for DynamoDbProvider");
   }
 
-  protected newest(): Promise<Stored> {
-    throw new Error("Method not implemented.");
+  public all(): Observable<Stored> {
+    return this.partition$().pipe(
+      mergeMap((part) => this.iterator$(part, "TRIM_HORIZON")),
+      mergeMap((it) =>
+        this.page$(it).pipe(
+          expand(({ next }) => (next ? this.page$(next) : EMPTY))
+        )
+      ),
+      mergeMap(({ items }) => from(items || []))
+    );
   }
 
-  protected all(): Promise<Stored[]> {
-    throw new Error("Method not implemented.");
-  }
-
-  protected stream(): Observable<Stored> {
-    // TODO: Periodically describe stream to check for new shards
-    return from(
-      this.streamClient.send(
-        new DescribeStreamCommand({ StreamArn: this.streamArn })
-      )
-    )
-      .pipe(
-        map(({ StreamDescription = {} }) => StreamDescription.Shards),
-        map((shards) => shards || []),
-        filter((shards) => !!shards.length),
-        concatMap((shards) => from(shards)),
-        switchMap((shard) =>
+  private partition$(): Observable<{ streamArn: string; shardId?: string }> {
+    return this.table.pipe(
+      switchMap(({ streamArn }) =>
+        defer(() =>
           from(
             this.streamClient.send(
-              new GetShardIteratorCommand({
-                ShardId: shard.ShardId!,
-                StreamArn: this.streamArn,
-                SequenceNumber:
-                  shard.SequenceNumberRange?.StartingSequenceNumber,
-                ShardIteratorType: "AT_SEQUENCE_NUMBER",
-              })
+              new DescribeStreamCommand({ StreamArn: streamArn })
             )
-          ).pipe(
-            map(({ ShardIterator }) => ShardIterator),
-            filter((ShardIterator) => !!ShardIterator),
-            switchMap((ShardIterator) =>
-              from(
-                this.streamClient.send(new GetRecordsCommand({ ShardIterator }))
-              ).pipe(
-                expand(({ Records, NextShardIterator }) => {
-                  if (!NextShardIterator) {
-                    return EMPTY;
-                  }
-                  return of(null).pipe(
-                    delayWhen(() =>
-                      timer(Records?.length ? 0 : 1000, asyncScheduler)
-                    ),
-                    switchMap(() =>
-                      from(
-                        this.streamClient.send(
-                          new GetRecordsCommand({
-                            ShardIterator: NextShardIterator,
-                          })
-                        )
-                      )
-                    )
-                  );
-                })
-              )
-            ),
-            concatMap(({ Records }) => from(Records || []))
           )
+        ).pipe(
+          map((res) => res.StreamDescription?.Shards || []),
+          mergeAll(),
+          map((shard) => ({
+            shardId: shard.ShardId,
+            streamArn,
+          }))
         )
       )
-      .pipe(
-        map(({ eventName, dynamodb = {} }) => ({
-          NewImage: dynamodb.NewImage,
-          OldImage: dynamodb.OldImage,
-          EventName: eventName,
+    );
+  }
+
+  private iterator$(
+    partition: {
+      streamArn: string;
+      shardId?: string;
+    },
+    boundary: "TRIM_HORIZON" | "LATEST"
+  ): Observable<string | undefined> {
+    return defer(() =>
+      from(
+        this.streamClient.send(
+          new GetShardIteratorCommand({
+            ShardId: partition.shardId,
+            StreamArn: partition.streamArn,
+            ShardIteratorType: boundary,
+          })
+        )
+      ).pipe(map((res) => res.ShardIterator))
+    );
+  }
+
+  private page$(iterator?: string): Observable<{
+    next?: string;
+    items: Stored[];
+  }> {
+    return defer(() =>
+      from(
+        this.streamClient.send(
+          new GetRecordsCommand({ ShardIterator: iterator })
+        )
+      ).pipe(
+        map(({ NextShardIterator, Records = [] }) => ({
+          next: NextShardIterator,
+          items: Records.filter((r) => r.eventName !== "REMOVE")
+            .map((r) => r.dynamodb?.NewImage)
+            .filter((i) => !!i)
+            .map((i) => unmarshall(i) as Stored),
         })),
-        filter(({ NewImage, OldImage, EventName }) => {
-          if (EventName === "REMOVE") {
-            // TODO: Consider how to handle REMOVE events with Expires
-            return false;
-          }
-          return true;
-        }),
-        map(({ NewImage }) => NewImage),
-        filter((NewImage) => !!NewImage),
-        map((item) => unmarshall(item) as Stored)
-      );
+        map(({ next, items }) => ({
+          next: items.length ? next : undefined,
+          items,
+        }))
+      )
+    );
   }
 
   get tableArn(): string {

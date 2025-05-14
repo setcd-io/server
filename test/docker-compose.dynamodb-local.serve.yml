@@ -2,8 +2,11 @@ version: "3.8"
 services:
   ddb:
     image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
     ports:
       - "8000:8000"
+    volumes:
+      - ./.cache/dynamodb-local:/data
   etcd:
     build:
       context: .

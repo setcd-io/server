@@ -6,9 +6,7 @@ import { DynamoDBRecord } from "aws-lambda";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import {
   filter,
-  firstValueFrom,
   from,
-  lastValueFrom,
   map,
   Observable,
   OperatorFunction,
@@ -17,9 +15,7 @@ import {
 import Context from "../context";
 import { serialize } from "./serde";
 import { Item } from "ddb-table/lib/DocumentClient";
-import { isEqual, last } from "lodash";
 import { DynamoDbProvider } from "../cloud-rx/dynamodb";
-import { Expireable } from "../cloud-rx/provider";
 
 export const KEY_SEPARATOR = "$";
 
