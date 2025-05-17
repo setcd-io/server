@@ -12,50 +12,161 @@ import {
   DynamoDBStreamsClient,
   GetRecordsCommand,
   GetShardIteratorCommand,
-  Shard,
 } from "@aws-sdk/client-dynamodb-streams";
 import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
   asyncScheduler,
   catchError,
+  concatAll,
   defer,
-  EMPTY,
+  distinct,
   expand,
+  firstValueFrom,
   forkJoin,
   from,
   fromEvent,
+  interval,
+  lastValueFrom,
   map,
   mergeAll,
   mergeMap,
   Observable,
   of,
+  startWith,
   switchMap,
   takeUntil,
   throwError,
   timer,
 } from "rxjs";
-import { Consistency, Provider, Serializer, Stored } from "../provider";
+import {
+  Consistency,
+  Provider,
+  Serializer,
+  Stored,
+  StoredKey,
+  StoredPartition,
+} from "../provider";
 import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
 
-export type Options<T> = {
-  signal: AbortSignal;
-  serializer: Serializer<T>;
+export type DynamoDbOptions<T> = {
   hashKey: string;
   rangeKey: string;
+  consistency: Consistency;
+  serializers: Serializer<T>;
+  signal: AbortSignal;
   region?: string;
 };
 
 export class DynamoDbProvider<T> extends Provider<T> {
+  override async init(tableName: string): Promise<this> {
+    this._id = tableName;
+    return lastValueFrom(
+      this.table.pipe(
+        map(({ tableArn, streamArn }) => {
+          this._tableArn = tableArn;
+          this._streamArn = streamArn;
+          return this;
+        })
+      )
+    );
+  }
+
+  override async put(item: Stored): Promise<Stored> {
+    return this.documentClient
+      .put({
+        Item: item,
+        TableName: this.tableName,
+      })
+      .then(() => item);
+  }
+
+  override async get(key: StoredKey): Promise<Stored> {
+    return this.documentClient
+      .get({
+        Key: key,
+        TableName: this.tableName,
+        ConsistentRead: this.consistency === "weak",
+      })
+      .then((res) => res.Item as Stored);
+  }
+
+  override async all(
+    partition: StoredPartition,
+    startKey?: StoredKey
+  ): Promise<Stored[]> {
+    return this.documentClient
+      .query({
+        TableName: this.tableName,
+        KeyConditionExpression:
+          "#partition = :partition AND begins_with(#timeflake, :sk)",
+        ExpressionAttributeNames: {
+          "#partition": this.opts.hashKey,
+          "#timeflake": this.opts.rangeKey,
+        },
+        ExpressionAttributeValues: {
+          ":partition": partition.partition,
+          ":sk": "",
+        },
+        ExclusiveStartKey: startKey,
+        ConsistentRead: this.consistency !== "none",
+      })
+      .then(async (res) => {
+        const items = (res.Items || []) as Stored[];
+        const next = await this.all(
+          partition,
+          res.LastEvaluatedKey as StoredKey
+        );
+        return [...items, ...next];
+      });
+  }
+
+  override async oldest(
+    partition: StoredPartition
+  ): Promise<Stored | undefined> {
+    return firstValueFrom(
+      this.shard$()
+        .pipe(switchMap((part) => this.iterator$(part, "TRIM_HORIZON")))
+        .pipe(switchMap((it) => this.page$(it)))
+        .pipe(
+          map(({ items }) =>
+            items.filter((i) => i.partition === partition.partition)
+          )
+        )
+        .pipe(mergeAll())
+    );
+  }
+
+  override stream(): Observable<Stored> {
+    return this.shard$().pipe(
+      mergeMap((shard) => this.iterator$(shard, "LATEST")),
+      mergeMap((it) =>
+        this.page$(it).pipe(
+          expand(({ next }) =>
+            next
+              ? this.page$(next)
+              : timer(50, asyncScheduler).pipe(mergeMap(() => this.page$(it)))
+          )
+        )
+      ),
+      mergeMap(({ items }) => from(items || []))
+    );
+  }
+
+  override repr(): string {
+    return `CloudRxDdb{ table=${this.tableName}, hash=${this.opts.hashKey}, range=${this.opts.rangeKey} }`;
+  }
+
   public readonly client: DynamoDBClient;
   public readonly documentClient: DynamoDBDocument;
   public readonly streamClient: DynamoDBStreamsClient;
+
   private _tableArn?: string;
   private _streamArn?: string;
 
-  constructor(tableName: string, private opts: Options<T>) {
-    super(tableName, opts.serializer, opts.signal);
+  constructor(private opts: DynamoDbOptions<T>) {
+    super(opts.consistency, opts.serializers, opts.signal);
     this.client = new DynamoDBClient({
       region: this.opts.region,
       // logger: console,
@@ -67,81 +178,40 @@ export class DynamoDbProvider<T> extends Provider<T> {
     });
   }
 
-  init(): Observable<this> {
-    return this.table.pipe(
-      map(({ tableArn, streamArn }) => {
-        this._tableArn = tableArn;
-        this._streamArn = streamArn;
-        return this;
-      })
-    );
-  }
-
   get tableName(): string {
-    return `${this.id}`;
+    const tableName = process.env.AWS_DYNAMODB_TABLE_ETCD__NAME;
+    if (!tableName) {
+      throw new FatalError(
+        "AWS_DYNAMODB_TABLE_ETCD__NAME enviornment variable is not set"
+      );
+    }
+    return `${tableName}-${this.id}`;
   }
 
-  protected async put(item: Stored): Promise<Stored> {
-    return this.documentClient
-      .put({
-        Item: item,
-        TableName: this.tableName,
-      })
-      .then(() => item);
-  }
-
-  protected async get(
-    flake: string,
-    consistency: Consistency
-  ): Promise<Stored> {
-    return this.documentClient
-      .get({
-        Key: { id: this.id, flake },
-        TableName: this.tableName,
-        ConsistentRead: consistency !== "none",
-      })
-      .then((res) => res.Item as Stored);
-  }
-
-  public latest(): Observable<Stored> {
-    throw new Error("Latest not implemented for DynamoDbProvider");
-  }
-
-  public all(): Observable<Stored> {
-    return this.partition$().pipe(
-      mergeMap((part) => this.iterator$(part, "TRIM_HORIZON")),
-      mergeMap((it) =>
-        this.page$(it).pipe(
-          expand(({ next }) => (next ? this.page$(next) : EMPTY))
-        )
-      ),
-      mergeMap(({ items }) => from(items || []))
-    );
-  }
-
-  private partition$(): Observable<{ streamArn: string; shardId?: string }> {
+  private shard$(): Observable<{ streamArn: string; shardId: string }> {
     return this.table.pipe(
       switchMap(({ streamArn }) =>
-        defer(() =>
-          from(
-            this.streamClient.send(
-              new DescribeStreamCommand({ StreamArn: streamArn })
+        interval(1000).pipe(
+          startWith(0),
+          switchMap(() =>
+            from(
+              this.streamClient.send(
+                new DescribeStreamCommand({ StreamArn: streamArn })
+              )
             )
-          )
-        ).pipe(
+          ),
           map((res) => res.StreamDescription?.Shards || []),
-          mergeAll(),
-          map((shard) => ({
-            shardId: shard.ShardId,
-            streamArn,
-          }))
+          concatAll(),
+          map((shard) => shard.ShardId!),
+          distinct((shardId) => shardId),
+          map((shardId) => ({ streamArn, shardId }))
         )
       )
     );
   }
 
   private iterator$(
-    partition: {
+    shard: {
       streamArn: string;
       shardId?: string;
     },
@@ -151,8 +221,8 @@ export class DynamoDbProvider<T> extends Provider<T> {
       from(
         this.streamClient.send(
           new GetShardIteratorCommand({
-            ShardId: partition.shardId,
-            StreamArn: partition.streamArn,
+            ShardId: shard.shardId,
+            StreamArn: shard.streamArn,
             ShardIteratorType: boundary,
           })
         )
@@ -187,7 +257,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
 
   get tableArn(): string {
     if (!this._tableArn) {
-      throw new Error(
+      throw new RetryError(
         "Table ARN is not available yet. Please call init() first."
       );
     }
@@ -196,7 +266,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
 
   get streamArn(): string {
     if (!this._streamArn) {
-      throw new Error(
+      throw new RetryError(
         "Stream ARN is not available yet. Please call init() first."
       );
     }
@@ -207,13 +277,6 @@ export class DynamoDbProvider<T> extends Provider<T> {
     tableArn: string;
     streamArn: string;
   }> {
-    if (this._tableArn && this._streamArn) {
-      return of({
-        tableArn: this._tableArn,
-        streamArn: this._streamArn,
-      });
-    }
-
     const describe$ = defer(() =>
       forkJoin([
         this.client.send(
@@ -292,6 +355,10 @@ export class DynamoDbProvider<T> extends Provider<T> {
       }
 
       if (error) {
+        if (error instanceof FatalError || error instanceof RetryError) {
+          throw error;
+        }
+
         console.warn(chalk.yellow(`WARN: ${error.name}: ${error.message}`));
 
         if (error.code === "ECONNREFUSED") {
@@ -311,7 +378,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
       }
 
       if (!table || !ttl) {
-        throw new FatalError("Table or TTL not found");
+        throw new FatalError("Table or TTL is not yet available");
       }
 
       if (table.TableStatus !== "ACTIVE") {
@@ -409,43 +476,36 @@ export class DynamoDbProvider<T> extends Provider<T> {
     }> =>
       timer(delay, asyncScheduler).pipe(
         takeUntil(fromEvent(this.signal, "abort")),
-        switchMap(() => create$.pipe(catchError(() => describe$))),
-        switchMap(({ table, ttl }) => {
-          try {
-            return of(assert(table, ttl));
-          } catch (e) {
-            if (!(e instanceof RetryError)) {
-              return throwError(() => new FatalError(e.message));
-            }
-            return check(1000);
+        switchMap(() =>
+          describe$.pipe(switchMap(({ table, ttl }) => of(assert(table, ttl))))
+        ),
+        catchError((err) => {
+          if (err instanceof FatalError) {
+            return throwError(() => err);
           }
+          return create$.pipe(
+            switchMap(({ table, ttl }) => of(assert(table, ttl)))
+          );
         }),
         catchError((err) => {
-          try {
-            assert(undefined, undefined, err);
-          } catch (e) {
-            if (!(e instanceof RetryError)) {
-              return throwError(() => err);
-            }
+          if (err instanceof FatalError) {
+            return throwError(() => err);
           }
-          return check(1000);
+          return of(assert(undefined, undefined, err));
+        }),
+        catchError((err) => {
+          if (err instanceof RetryError) {
+            return check(1000);
+          }
+          return throwError(() => err);
         })
       );
 
     return check(0).pipe(
-      catchError((err) =>
-        throwError(
-          () => new Error(`Unable to use \`${this.tableName}\`: ${err.message}`)
-        )
-      ),
       map(({ table }) => ({
         tableArn: table.TableArn!,
         streamArn: table.LatestStreamArn!,
       }))
     );
-  }
-
-  repr(): string {
-    return `CloudRxDdb{ table=${this.tableName}, hash=${this.opts.hashKey}, range=${this.opts.rangeKey} }`;
   }
 }

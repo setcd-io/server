@@ -1,20 +1,16 @@
-import {
-  asyncScheduler,
-  filter,
-  forkJoin,
-  from,
-  map,
-  Observable,
-  observeOn,
-  of,
-  switchMap,
-} from "rxjs";
+import { first, from, Observable, of, skipUntil, switchMap, take } from "rxjs";
 import util from "util";
 import { random } from "timeflake";
 
-export type Stored = {
-  id: string;
-  flake: string;
+export type StoredPartition = {
+  partition: string;
+};
+
+export type StoredKey = StoredPartition & {
+  timeflake: string;
+};
+
+export type Stored = StoredKey & {
   hash: string;
   data: string;
   createdMs: number;
@@ -24,85 +20,70 @@ export type Stored = {
 export type Consistency = "strong" | "weak" | "none";
 
 export interface Serializer<T> {
+  partition: (value: T) => string;
   hash: (value: T) => string;
   serialize: (value: T) => string;
   deserialize: (value: string) => T;
 }
 
 export abstract class Provider<T> {
+  abstract init(id: string): Promise<this>;
+  abstract put(item: Stored): Promise<Stored>;
+  abstract get(key: StoredKey): Promise<Stored>;
+  abstract oldest(partition: StoredPartition): Promise<Stored | undefined>;
+  abstract all(partition: StoredPartition): Promise<Stored[]>;
+  abstract stream(): Observable<Stored>; // TODO Change to *stream
+  abstract repr(): string;
+
+  protected _id?: string;
+
   constructor(
-    protected id: string,
+    protected consistency: Consistency,
     protected serializer: Serializer<T>,
     protected signal: AbortSignal
   ) {}
 
-  public withId(id: string): this {
-    this.id = `${this.id}-${id}`;
-    return this;
-  }
-
-  abstract init(): Observable<this>;
-
-  protected serialize(value: T): string {
-    return this.serializer.serialize(value);
-  }
-
-  protected deserialize(value: string): T {
-    return this.serializer.deserialize(value);
+  get id(): string {
+    if (!this._id) {
+      throw new Error(
+        "Provider ID is not available yet. Please call init() first."
+      );
+    }
+    return this._id;
   }
 
   public convert(value: Stored): T {
-    return {
-      id: value.id,
-      flake: value.flake,
-      hash: value.hash,
-      data: this.serializer.deserialize(value.data),
-      createdMs: value.createdMs,
-    } as T;
+    return this.serializer.deserialize(value.data);
   }
 
-  protected abstract put(item: Stored): Promise<Stored>;
-
-  protected abstract get(
-    flake: string,
-    consistency: Consistency
-  ): Promise<Stored>;
-
-  public abstract all(): Observable<Stored>;
-
-  public abstract latest(): Observable<Stored>;
-
-  public persist(data: T, consistency: Consistency = "strong"): Observable<T> {
+  public persist(data: T): Observable<Stored> {
     return of({
-      id: this.id,
-      flake: random().base62,
+      partition: this.serializer.partition(data),
+      timeflake: random().base62,
       hash: this.serializer.hash(data),
       data: this.serializer.serialize(data),
       createdMs: Date.now(),
     } as Stored).pipe(
-      switchMap((item) => this.put(item)),
       switchMap((stored) => {
-        if (consistency === "none") {
-          return of(stored);
-        } else if (consistency === "weak") {
-          return from(this.get(stored.flake, "weak"));
-        } else {
-          return forkJoin([
-            this.latest().pipe(observeOn(asyncScheduler)),
-            from(this.get(stored.flake, "weak")).pipe(
-              observeOn(asyncScheduler)
-            ),
-          ]).pipe(
-            filter(
-              ([streamed, stored]) =>
-                streamed.id === this.id && streamed.flake === stored.flake
-            ),
-            map(([streamed]) => streamed)
-          );
+        if (this.consistency === "none") {
+          return from(this.put(stored));
         }
-      }),
-      map((stored) => {
-        return this.serializer.deserialize(stored.data);
+
+        if (this.consistency === "weak") {
+          return from(this.put(stored).then(() => this.get(stored)));
+        }
+
+        return this.stream().pipe(
+          skipUntil(this.put(stored)),
+          first((streamed) => {
+            return (
+              streamed.partition === stored.partition &&
+              streamed.timeflake === stored.timeflake &&
+              streamed.hash === stored.hash
+            );
+          }),
+          take(1)
+        );
       })
     );
   }
@@ -110,8 +91,6 @@ export abstract class Provider<T> {
   toString(): string {
     return `${this.repr()} [CloudRx{ id=${this.id} }]`;
   }
-
-  abstract repr(): string;
 
   [util.inspect.custom](
     depth: number,

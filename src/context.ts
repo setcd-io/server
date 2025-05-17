@@ -6,7 +6,7 @@ dotenvExpand.expand(dotenv.config());
 import { unmarshallOptions } from "@aws-sdk/lib-dynamodb";
 import { Logger, P } from "pino";
 import EventEmitter from "events";
-import { BaseSchema, RevisionSchema, RevisionTable } from "./storage/base";
+import { BaseSchema, RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
 import { DynamoDbProvider } from "./cloud-rx/dynamodb";
 import { TenantHistory } from "./storage/kv";
@@ -50,69 +50,65 @@ class Context
   public readonly revisionStorage: DynamoDbProvider<BaseSchema>;
   public readonly historyStorage: DynamoDbProvider<TenantHistory>;
 
-  private revisions: RevisionTable;
+  // TODO: Introduce a PersistentCounter Subject
+  private revisions?: RevisionTable;
 
   constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
 
-    this.kvStorage = new DynamoDbProvider<BaseSchema>(
-      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
-      {
-        signal: this.signal,
-        hashKey: "pk",
-        rangeKey: "sk",
-        serializer: {
-          hash: (value: BaseSchema) => `${value.pk}:${value.sk}`,
-          serialize: (value: BaseSchema) => JSON.stringify(value),
-          deserialize: (value: string) => JSON.parse(value),
-        },
-      }
-    ).withId("kv");
+    this.kvStorage = new DynamoDbProvider<BaseSchema>({
+      signal: this.signal,
+      hashKey: "pk",
+      rangeKey: "sk",
+      consistency: "strong",
+      serializers: {
+        partition: (value: BaseSchema) => value.pk,
+        hash: (value: BaseSchema) => value.sk,
+        serialize: (value: BaseSchema) => JSON.stringify(value),
+        deserialize: (value: string) => JSON.parse(value),
+      },
+    });
 
-    this.revisionStorage = new DynamoDbProvider<BaseSchema>(
-      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
-      {
-        signal: this.signal,
-        hashKey: "pk",
-        rangeKey: "sk",
-        serializer: {
-          hash: (value: BaseSchema) => `${value.pk}:${value.sk}`,
-          serialize: (value: BaseSchema) => JSON.stringify(value),
-          deserialize: (value: string) => JSON.parse(value),
-        },
-      }
-    ).withId("revision");
+    this.revisionStorage = new DynamoDbProvider<BaseSchema>({
+      signal: this.signal,
+      hashKey: "pk",
+      rangeKey: "sk",
+      consistency: "strong",
+      serializers: {
+        partition: (value: BaseSchema) => value.pk,
+        hash: (value: BaseSchema) => value.sk,
+        serialize: (value: BaseSchema) => JSON.stringify(value),
+        deserialize: (value: string) => JSON.parse(value),
+      },
+    });
 
-    this.historyStorage = new DynamoDbProvider<TenantHistory>(
-      opts?.table || process.env.AWS_DYNAMODB_TABLE_ETCD__NAME!,
-      {
-        signal: this.signal,
-        hashKey: "id",
-        rangeKey: "flake",
-        serializer: {
-          hash: (value: TenantHistory) =>
-            `${value.tenant}:${serialize(value.current.key, "base64", true)}`,
-          serialize: (value: TenantHistory) =>
-            JSON.stringify({
-              ..._.cloneDeep(value),
-              current: serialize(value.current, "base64", true),
-              previous: serialize(value.previous, "base64", false),
-            }),
-          deserialize: (value: string) => {
-            const item = JSON.parse(value);
-            return {
-              ...item,
-              current: deserialize(item.current, true),
-              previous: deserialize(item.previous, false),
-            };
-          },
+    this.historyStorage = new DynamoDbProvider<TenantHistory>({
+      signal: this.signal,
+      hashKey: "partition",
+      rangeKey: "timeflake",
+      consistency: "strong",
+      serializers: {
+        partition: (value: TenantHistory) => value.tenant,
+        hash: (value: TenantHistory) =>
+          serialize(value.current.key, "base64", true),
+        serialize: (value: TenantHistory) =>
+          JSON.stringify({
+            ..._.cloneDeep(value),
+            current: serialize(value.current, "base64", true),
+            previous: serialize(value.previous, "base64", false),
+          }),
+        deserialize: (value: string) => {
+          const item = JSON.parse(value);
+          return {
+            ...item,
+            current: deserialize(item.current, true),
+            previous: deserialize(item.previous, false),
+          };
         },
-      }
-    ).withId("history");
-
-    this.revisions = new RevisionTable(this.revisionStorage);
+      },
+    });
 
     this.on("abort", ({ reason, ctx }) => {
       let context: string | AbortContext | undefined = ctx;
@@ -173,6 +169,10 @@ class Context
   }
 
   async minRevision(tenant: string, minRevision?: number): Promise<number> {
+    if (!this.revisions) {
+      this.revisions = new RevisionTable(this.revisionStorage);
+    }
+
     const pk = this.revisions._pk(tenant);
     const sk = this.revisions._sk("revision");
 
@@ -201,6 +201,10 @@ class Context
   }
 
   async currentRevision(tenant: string): Promise<number> {
+    if (!this.revisions) {
+      this.revisions = new RevisionTable(this.revisionStorage);
+    }
+
     const pk = this.revisions._pk(tenant);
     const sk = this.revisions._sk("revision");
 
@@ -216,6 +220,10 @@ class Context
   }
 
   async nextRevision(tenant: string): Promise<number> {
+    if (!this.revisions) {
+      this.revisions = new RevisionTable(this.revisionStorage);
+    }
+
     const pk = this.revisions._pk(tenant);
     const sk = this.revisions._sk("revision");
 
@@ -232,6 +240,10 @@ class Context
   }
 
   async nextLease(tenant: string): Promise<number> {
+    if (!this.revisions) {
+      this.revisions = new RevisionTable(this.revisionStorage);
+    }
+
     const pk = this.revisions._pk(tenant);
     const sk = this.revisions._sk("lease");
 
@@ -248,6 +260,10 @@ class Context
   }
 
   async nextWatch(tenant: string): Promise<number> {
+    if (!this.revisions) {
+      this.revisions = new RevisionTable(this.revisionStorage);
+    }
+
     const pk = this.revisions._pk(tenant);
     const sk = this.revisions._sk("watch");
 

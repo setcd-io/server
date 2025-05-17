@@ -7,19 +7,7 @@ import {
 } from "@setcd-io/connectrpc-etcd";
 import Context from "../context";
 import { deserialize, serialize } from "./serde";
-import {
-  asyncScheduler,
-  concatMap,
-  filter,
-  lastValueFrom,
-  Observable,
-  share,
-  switchMap,
-  takeUntil,
-  timer,
-  toArray,
-  windowTime,
-} from "rxjs";
+import { bufferTime, filter, Observable, share, takeUntil, timer } from "rxjs";
 import { QueryCommandInput } from "@aws-sdk/lib-dynamodb";
 import _ from "lodash";
 import { ErrGRPCEmptyKey } from "../util/error";
@@ -78,6 +66,7 @@ const lastChar = (str: string | undefined): number | undefined => {
 };
 
 const HISTORY_SIZE = 1000;
+const HISTORY_BATCH_SIZE = HISTORY_SIZE / 100;
 const HISTORY_TIMEOUT = HISTORY_SIZE / 10;
 const WITH_TIMEOUT = <T>() => takeUntil<T>(timer(HISTORY_TIMEOUT));
 
@@ -91,25 +80,13 @@ export type TenantHistory = {
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   private history: PersistentSubject<TenantHistory>;
-  public readonly history$: Observable<TenantHistory[]>;
 
   constructor(ctx: Context) {
     super(ctx, "kv");
 
-    this.history = new PersistentSubject<TenantHistory>(
-      ctx.historyStorage,
-      { bufferSize: HISTORY_SIZE },
-      {
-        signal: ctx.signal,
-      }
-    );
-
-    this.history$ = this.history.pipe(
-      windowTime(HISTORY_TIMEOUT, asyncScheduler),
-      concatMap((window) => window.pipe(toArray())),
-      filter((history) => !!history.length),
-      share()
-    );
+    this.history = new PersistentSubject<TenantHistory>(ctx.historyStorage, {
+      signal: ctx.signal,
+    });
 
     // const expiration = this.history.expired
     //   .pipe(switchMap((h) => this.deleteKey(h.tenant, h.current.key)))
@@ -118,6 +95,15 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     ctx.on("abort", () => {
       // expiration.unsubscribe();
     });
+  }
+
+  public history$(tenant: string): Observable<TenantHistory[]> {
+    return this.history.pipe(
+      filter((h) => h.tenant === tenant),
+      bufferTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT, HISTORY_BATCH_SIZE),
+      filter((histories) => !!histories.length),
+      share()
+    );
   }
 
   async putKey(
@@ -667,16 +653,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       key = serialize(key, "utf8", true);
     }
 
-    const foo = this.history.pipe();
-
-    const all = await lastValueFrom(
-      this.history.pipe(
-        WITH_TIMEOUT(),
-        filter((h) => h.tenant === tenant),
-        filter((h) => serialize(h.current.key, "utf8", true) === key),
-        toArray()
-      )
-    );
+    const all = await this.history.all(tenant);
 
     if (!revision) {
       return all.slice(-1)[0];

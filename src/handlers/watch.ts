@@ -5,8 +5,6 @@ import {
   WatchRequest,
   WatchResponse,
   Event_EventType,
-  Event,
-  RangeRequest,
   KeyValue,
 } from "@setcd-io/connectrpc-etcd";
 import { BaseHandler, StreamResponse } from "./base";
@@ -26,7 +24,6 @@ import {
   OperatorFunction,
   switchMap,
   takeWhile,
-  tap,
   toArray,
 } from "rxjs";
 import { serialize } from "../storage/serde";
@@ -159,7 +156,7 @@ export class WatchHandler extends BaseHandler {
       ctx,
       {
         requests,
-        history: this.kv.kv.history$,
+        history: this.kv.kv.history$(this.getTenant(ctx)),
       },
       {
         history: (his) => {

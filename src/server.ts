@@ -3,31 +3,18 @@ import { fastify, FastifyInstance } from "fastify";
 import { fastifyConnectPlugin } from "@connectrpc/connect-fastify";
 import { createRouter } from "./routes";
 import { Code, ConnectError, Interceptor } from "@connectrpc/connect";
-import { Agent } from "https";
-import fs, { read } from "fs";
-import axios from "axios";
 import http2 from "http2-wrapper";
 // import { TableMonitor } from "./storage/monitor";
-import {
-  asyncScheduler,
-  combineLatest,
-  firstValueFrom,
-  from,
-  interval,
-  lastValueFrom,
-  switchMap,
-} from "rxjs";
+import { asyncScheduler, interval } from "rxjs";
 import { KVHandler } from "./handlers/kv";
 import { WatchHandler } from "./handlers/watch";
 import { LeaseHandler } from "./handlers/lease";
 import { MaintenanceHandler } from "./handlers/maintenance";
 import { ClusterHandler } from "./handlers/cluster";
-import path, { join } from "path";
 import { AuthHandler } from "./handlers/auth";
 import { nanoid } from "nanoid";
 import _ from "lodash";
 import { log } from "./util/log";
-import { version } from "../package.json";
 import {
   CONNECTION_ID,
   CONNECTION_TIMEOUT,
@@ -109,9 +96,9 @@ async function main(ctx: Context) {
   const cluster = new ClusterHandler(ctx);
 
   console.table({
-    "KV Table": (await lastValueFrom(ctx.kvStorage.init())).repr(),
-    "Revision Table": (await lastValueFrom(ctx.revisionStorage.init())).repr(),
-    "History Table": (await lastValueFrom(ctx.historyStorage.init())).repr(),
+    "KV Table": (await ctx.kvStorage.init("kv")).repr(),
+    "Revision Table": (await ctx.revisionStorage.init("revision")).repr(),
+    "History Table": (await ctx.historyStorage.init("history")).repr(),
   });
 
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });

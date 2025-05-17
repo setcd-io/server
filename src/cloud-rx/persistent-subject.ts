@@ -1,12 +1,10 @@
 import {
-  ReplaySubject,
-  asyncScheduler,
   Subject,
   Subscription,
   TimestampProvider,
   switchMap,
-  share,
-  observeOn,
+  Subscriber,
+  tap,
 } from "rxjs";
 import { Consistency, Provider, Stored } from "./provider";
 import _ from "lodash";
@@ -15,33 +13,21 @@ export class PersistentSubject<T>
   extends Subject<T>
   implements TimestampProvider
 {
-  private consistency: Consistency;
-  private _buffer: ReplaySubject<T>;
-  private _incoming: Subject<T> = new Subject<T>();
   private _last?: Stored;
 
-  private incoming$ = this._incoming.pipe(observeOn(asyncScheduler), share());
   private signal: AbortSignal | undefined;
   private subscriptions: Subscription[] = [];
 
+  private _incoming = new Subject<T>();
+
   constructor(
-    provider: Provider<T>,
-    private readonly config: {
-      bufferSize?: number;
-      windowTime?: number;
-    },
+    private readonly provider: Provider<T>,
     private readonly opts?: {
       signal?: AbortSignal;
       consistency?: Consistency;
     }
   ) {
     super();
-
-    this._buffer = new ReplaySubject<T>(
-      config.bufferSize || Infinity,
-      config.windowTime || Infinity,
-      this
-    );
 
     if (opts?.signal) {
       this.signal = opts.signal;
@@ -50,35 +36,13 @@ export class PersistentSubject<T>
       });
     }
 
-    if (opts?.consistency) {
-      this.consistency = opts.consistency;
-    } else {
-      this.consistency = "weak"; // TODO: make strong
-    }
-
-    this.pipe = this._buffer.pipe.bind(this._buffer);
-    this.subscribe = this._buffer.subscribe.bind(this._buffer);
-
     this.subscriptions.push(
-      this.incoming$
-        .pipe(switchMap((value) => provider.persist(value, this.consistency)))
-        .subscribe({
-          next: (value) => {
-            this._buffer.next(value);
-          },
-          error: (err) => this.error(err),
-          complete: () => this.complete(),
-        })
-    );
-
-    this.subscriptions.push(
-      provider.all().subscribe({
-        next: (item) => {
-          this._last = item;
-          this._buffer.next(provider.convert(item));
-        },
-        error: (err) => this.error(err),
-      })
+      this._incoming
+        .pipe(
+          switchMap((value) => provider.persist(value)),
+          tap((value) => (this._last = value))
+        )
+        .subscribe()
     );
   }
 
@@ -86,15 +50,34 @@ export class PersistentSubject<T>
     return this._last?.createdMs || new Date().getTime();
   }
 
-  next(value: T): void {
+  async all(partition: string): Promise<T[]> {
+    return this.provider
+      .all({ partition })
+      .then((items) => items.map((item) => this.provider.convert(item)));
+  }
+
+  override next(value: T): void {
     this._incoming.next(value);
+  }
+
+  protected _subscribe(subscriber: Subscriber<T>): Subscription {
+    return this.provider.stream().subscribe({
+      next: (item) => {
+        subscriber.next(this.provider.convert(item));
+      },
+      error: (err) => {
+        subscriber.error(err);
+      },
+      complete: () => {
+        subscriber.complete();
+      },
+    });
   }
 
   complete(): void {
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._incoming.complete();
-    this._buffer.complete();
     super.complete();
   }
 
@@ -102,7 +85,6 @@ export class PersistentSubject<T>
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._incoming.unsubscribe();
-    this._buffer.unsubscribe();
     super.unsubscribe();
   }
 
@@ -110,7 +92,6 @@ export class PersistentSubject<T>
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
     this._incoming.error(err);
-    this._buffer.error(err);
     super.error(err);
   }
 }

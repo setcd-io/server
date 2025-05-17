@@ -1,4 +1,4 @@
-import { BaseHandler, StreamRequest, StreamResponse } from "./base";
+import { BaseHandler, StreamResponse } from "./base";
 import Context from "../context";
 import {
   LeaseGrantRequest,
@@ -20,10 +20,7 @@ import {
   interval,
   map,
   Observable,
-  observeOn,
   OperatorFunction,
-  share,
-  Subject,
   switchMap,
   takeWhile,
 } from "rxjs";
@@ -134,7 +131,7 @@ export class LeaseHandler extends BaseHandler {
     return this.bidi(
       ctx,
       {
-        history: this.kv.kv.history$,
+        history: this.kv.kv.history$(this.getTenant(ctx)),
         requests,
       },
       {
