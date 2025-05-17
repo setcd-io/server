@@ -18,6 +18,7 @@ import {
   asyncScheduler,
   catchError,
   concatAll,
+  concatMap,
   defer,
   distinct,
   expand,
@@ -28,8 +29,6 @@ import {
   interval,
   lastValueFrom,
   map,
-  mergeAll,
-  mergeMap,
   Observable,
   of,
   startWith,
@@ -134,23 +133,23 @@ export class DynamoDbProvider<T> extends Provider<T> {
             items.filter((i) => i.partition === partition.partition)
           )
         )
-        .pipe(mergeAll())
+        .pipe(concatAll())
     );
   }
 
   override stream(): Observable<Stored> {
     return this.shard$().pipe(
-      mergeMap((shard) => this.iterator$(shard, "LATEST")),
-      mergeMap((it) =>
+      concatMap((shard) => this.iterator$(shard, "LATEST")),
+      concatMap((it) =>
         this.page$(it).pipe(
           expand(({ next }) =>
             next
               ? this.page$(next)
-              : timer(50, asyncScheduler).pipe(mergeMap(() => this.page$(it)))
+              : timer(50, asyncScheduler).pipe(concatMap(() => this.page$(it)))
           )
         )
       ),
-      mergeMap(({ items }) => from(items || []))
+      concatMap(({ items }) => from(items || []))
     );
   }
 
