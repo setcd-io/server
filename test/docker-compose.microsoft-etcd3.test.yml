@@ -1,5 +1,6 @@
 services:
   test:
+    tty: true
     depends_on:
       etcd:
         condition: service_healthy

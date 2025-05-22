@@ -11,10 +11,11 @@
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/server.ts",
     "build": "yarn build:server",
-    "build:server": "tsup src/server.ts",
+    "build:server": "tsup src/server.ts --sourcemap --dts --format cjs --target esnext --cjsInterop",
     "build:exe": "yarn build && pkg dist/server.js --compress Brotli --output dist/server --targets node22-linuxstatic-x64,node22-linuxstatic-arm64",
     "start:server": "node dist/server.js",
-    "start": "yarn build && node dist/server.js"
+    "start": "yarn build && node dist/server.js",
+    "start:dev": "tsx src/server.ts"
   },
   "keywords": [],
   "author": "Scaffoldly <https://github.com/scaffoldly>",
@@ -58,6 +59,7 @@
     "rxjs": "^7.8.1",
     "stream-buffers": "^3.0.3",
     "timeflake": "^0.1.1",
+    "tree-model": "^1.0.7",
     "ts-node": "^10.9.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.3",

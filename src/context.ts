@@ -62,26 +62,12 @@ class Context
       signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
-      consistency: "strong",
-      serializers: {
-        partition: (value: BaseSchema) => value.pk,
-        hash: (value: BaseSchema) => value.sk,
-        serialize: (value: BaseSchema) => JSON.stringify(value),
-        deserialize: (value: string) => JSON.parse(value),
-      },
     });
 
     this.revisionStorage = new DynamoDbProvider<BaseSchema>({
       signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
-      consistency: "strong",
-      serializers: {
-        partition: (value: BaseSchema) => value.pk,
-        hash: (value: BaseSchema) => value.sk,
-        serialize: (value: BaseSchema) => JSON.stringify(value),
-        deserialize: (value: string) => JSON.parse(value),
-      },
     });
 
     this.historyStorage = new DynamoDbProvider<TenantHistory>({

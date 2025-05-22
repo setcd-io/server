@@ -5,8 +5,7 @@ COPY . .
 
 # The Server
 RUN --mount=type=cache,target=/usr/local/share/.cache \
-    yarn && \
-    yarn build
+    yarn
 
 RUN mkdir proto && cp /work/node_modules/etcd3/proto/* /work/proto/
 COPY --from=bitnami/etcd:3.5 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
@@ -15,8 +14,8 @@ ENV CERTDIR=/work/src/certs
 ENV CERTFILE=localhost.crt
 ENV KEYFILE=localhost.key
 
-ENTRYPOINT [ "node" ]
-CMD [ "/work/dist/server.js" ]
+ENTRYPOINT [ "yarn" ]
+CMD [ "start:dev" ]
 EXPOSE 2379
 
 FROM --platform=${BUILDPLATFORM} node:22-alpine AS exe

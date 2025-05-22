@@ -1,20 +1,9 @@
-import {
-  Subject,
-  Subscription,
-  TimestampProvider,
-  switchMap,
-  Subscriber,
-  tap,
-} from "rxjs";
-import { Consistency, Provider, Stored } from "./provider";
+import { Subject, Subscription, switchMap, Subscriber, from } from "rxjs";
+import { Consistency, Provider } from "./provider";
 import _ from "lodash";
+import { subscribe } from "./util";
 
-export class PersistentSubject<T>
-  extends Subject<T>
-  implements TimestampProvider
-{
-  private _last?: Stored;
-
+export class PersistentSubject<T> extends Subject<T> {
   private signal: AbortSignal | undefined;
   private subscriptions: Subscription[] = [];
 
@@ -24,7 +13,7 @@ export class PersistentSubject<T>
     private readonly provider: Provider<T>,
     private readonly opts?: {
       signal?: AbortSignal;
-      consistency?: Consistency;
+      consistency?: Consistency; // TODO: provider.withConsistency: makes new provider
     }
   ) {
     super();
@@ -38,19 +27,13 @@ export class PersistentSubject<T>
 
     this.subscriptions.push(
       this._incoming
-        .pipe(
-          switchMap((value) => provider.persist(value)),
-          tap((value) => (this._last = value))
-        )
+        .pipe(switchMap((value) => from(provider.persist(value))))
         .subscribe()
     );
   }
 
-  now(): number {
-    return this._last?.createdMs || new Date().getTime();
-  }
-
   async all(partition: string): Promise<T[]> {
+    // TODO: delete old items
     return this.provider
       .all({ partition })
       .then((items) => items.map((item) => this.provider.convert(item)));
@@ -61,7 +44,7 @@ export class PersistentSubject<T>
   }
 
   protected _subscribe(subscriber: Subscriber<T>): Subscription {
-    return this.provider.stream().subscribe({
+    return this.provider.observeLatest().subscribe({
       next: (item) => {
         subscriber.next(this.provider.convert(item));
       },

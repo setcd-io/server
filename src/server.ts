@@ -23,6 +23,8 @@ import {
   REQUEST_TIMEOUT,
   TENANT,
 } from "./util/const";
+import { Shards } from "./cloud-rx/dynamodb/shards";
+import { TenantHistory } from "./storage/kv";
 
 const isStatus = process.argv.slice(-1)[0] === "status";
 const isVersion = process.argv.includes("--version");
@@ -95,10 +97,14 @@ async function main(ctx: Context) {
   const maintenance = new MaintenanceHandler(ctx);
   const cluster = new ClusterHandler(ctx);
 
+  const kvStorage = await ctx.kvStorage.init("kv");
+  const revisionStorage = await ctx.revisionStorage.init("revision");
+  const historyStorage = await ctx.historyStorage.init("history");
+
   console.table({
-    "KV Table": (await ctx.kvStorage.init("kv")).repr(),
-    "Revision Table": (await ctx.revisionStorage.init("revision")).repr(),
-    "History Table": (await ctx.historyStorage.init("history")).repr(),
+    "KV Table": kvStorage.repr(),
+    "Revision Table": revisionStorage.repr(),
+    "History Table": historyStorage.repr(),
   });
 
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });

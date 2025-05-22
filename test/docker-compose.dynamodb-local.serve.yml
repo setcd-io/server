@@ -8,6 +8,7 @@ services:
     volumes:
       - ./.cache/dynamodb-local:/data
   etcd:
+    tty: true
     build:
       context: .
       dockerfile: Dockerfile

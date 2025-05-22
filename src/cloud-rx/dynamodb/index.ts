@@ -17,12 +17,8 @@ import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
   asyncScheduler,
   catchError,
-  concatAll,
-  concatMap,
   defer,
-  distinct,
-  expand,
-  firstValueFrom,
+  filter,
   forkJoin,
   from,
   fromEvent,
@@ -31,9 +27,12 @@ import {
   map,
   Observable,
   of,
+  ReplaySubject,
   startWith,
   switchMap,
+  take,
   takeUntil,
+  tap,
   throwError,
   timer,
 } from "rxjs";
@@ -48,13 +47,15 @@ import {
 import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
+import { Shard, Shards } from "./shards";
+import { observe } from "../util";
 
 export type DynamoDbOptions<T> = {
   hashKey: string;
   rangeKey: string;
-  consistency: Consistency;
-  serializers: Serializer<T>;
   signal: AbortSignal;
+  consistency?: Consistency;
+  serializers?: Serializer<T>;
   region?: string;
 };
 
@@ -66,6 +67,18 @@ export class DynamoDbProvider<T> extends Provider<T> {
         map(({ tableArn, streamArn }) => {
           this._tableArn = tableArn;
           this._streamArn = streamArn;
+          if (this.consistency === "strong") {
+            console.log(
+              chalk.blue(
+                `${chalk.yellow(
+                  "NOTE:"
+                )} Enabling shard observation for table ${chalk.bold(
+                  this.tableName
+                )}`
+              )
+            );
+            this._shards = new Shards(this, streamArn, this.signal);
+          }
           return this;
         })
       )
@@ -84,11 +97,13 @@ export class DynamoDbProvider<T> extends Provider<T> {
   override async get(key: StoredKey): Promise<Stored> {
     return this.documentClient
       .get({
-        Key: key,
+        Key: { partition: key.partition, timeflake: key.timeflake },
         TableName: this.tableName,
-        ConsistentRead: this.consistency === "weak",
+        ConsistentRead: this.consistency !== "none",
       })
-      .then((res) => res.Item as Stored);
+      .then((res) => {
+        return res.Item as Stored;
+      });
   }
 
   override async all(
@@ -98,15 +113,14 @@ export class DynamoDbProvider<T> extends Provider<T> {
     return this.documentClient
       .query({
         TableName: this.tableName,
-        KeyConditionExpression:
-          "#partition = :partition AND begins_with(#timeflake, :sk)",
+        KeyConditionExpression: "#hash = :hash AND begins_with(#range, :range)",
         ExpressionAttributeNames: {
-          "#partition": this.opts.hashKey,
-          "#timeflake": this.opts.rangeKey,
+          "#hash": this.opts.hashKey,
+          "#range": this.opts.rangeKey,
         },
         ExpressionAttributeValues: {
-          ":partition": partition.partition,
-          ":sk": "",
+          ":hash": partition.partition,
+          ":range": "",
         },
         ExclusiveStartKey: startKey,
         ConsistentRead: this.consistency !== "none",
@@ -124,33 +138,19 @@ export class DynamoDbProvider<T> extends Provider<T> {
   override async oldest(
     partition: StoredPartition
   ): Promise<Stored | undefined> {
-    return firstValueFrom(
-      this.shard$()
-        .pipe(switchMap((part) => this.iterator$(part, "TRIM_HORIZON")))
-        .pipe(switchMap((it) => this.page$(it)))
-        .pipe(
-          map(({ items }) =>
-            items.filter((i) => i.partition === partition.partition)
-          )
-        )
-        .pipe(concatAll())
+    return lastValueFrom(
+      this.observeAll()
+        .pipe(filter((shard) => shard.partition === partition.partition))
+        .pipe(take(1))
     );
   }
 
-  override stream(): Observable<Stored> {
-    return this.shard$().pipe(
-      concatMap((shard) => this.iterator$(shard, "LATEST")),
-      concatMap((it) =>
-        this.page$(it).pipe(
-          expand(({ next }) =>
-            next
-              ? this.page$(next)
-              : timer(50, asyncScheduler).pipe(concatMap(() => this.page$(it)))
-          )
-        )
-      ),
-      concatMap(({ items }) => from(items || []))
-    );
+  override observeAll(): Observable<Stored> {
+    return this.shards.observe("ALL");
+  }
+
+  override observeLatest(): Observable<Stored> {
+    return this.shards.observe("LATEST");
   }
 
   override repr(): string {
@@ -163,9 +163,10 @@ export class DynamoDbProvider<T> extends Provider<T> {
 
   private _tableArn?: string;
   private _streamArn?: string;
+  private _shards?: Shards<T>;
 
   constructor(private opts: DynamoDbOptions<T>) {
-    super(opts.consistency, opts.serializers, opts.signal);
+    super(opts.signal, opts.consistency || "weak", opts.serializers);
     this.client = new DynamoDBClient({
       region: this.opts.region,
       // logger: console,
@@ -187,73 +188,6 @@ export class DynamoDbProvider<T> extends Provider<T> {
     return `${tableName}-${this.id}`;
   }
 
-  private shard$(): Observable<{ streamArn: string; shardId: string }> {
-    return this.table.pipe(
-      switchMap(({ streamArn }) =>
-        interval(1000).pipe(
-          startWith(0),
-          switchMap(() =>
-            from(
-              this.streamClient.send(
-                new DescribeStreamCommand({ StreamArn: streamArn })
-              )
-            )
-          ),
-          map((res) => res.StreamDescription?.Shards || []),
-          concatAll(),
-          map((shard) => shard.ShardId!),
-          distinct((shardId) => shardId),
-          map((shardId) => ({ streamArn, shardId }))
-        )
-      )
-    );
-  }
-
-  private iterator$(
-    shard: {
-      streamArn: string;
-      shardId?: string;
-    },
-    boundary: "TRIM_HORIZON" | "LATEST"
-  ): Observable<string | undefined> {
-    return defer(() =>
-      from(
-        this.streamClient.send(
-          new GetShardIteratorCommand({
-            ShardId: shard.shardId,
-            StreamArn: shard.streamArn,
-            ShardIteratorType: boundary,
-          })
-        )
-      ).pipe(map((res) => res.ShardIterator))
-    );
-  }
-
-  private page$(iterator?: string): Observable<{
-    next?: string;
-    items: Stored[];
-  }> {
-    return defer(() =>
-      from(
-        this.streamClient.send(
-          new GetRecordsCommand({ ShardIterator: iterator })
-        )
-      ).pipe(
-        map(({ NextShardIterator, Records = [] }) => ({
-          next: NextShardIterator,
-          items: Records.filter((r) => r.eventName !== "REMOVE")
-            .map((r) => r.dynamodb?.NewImage)
-            .filter((i) => !!i)
-            .map((i) => unmarshall(i) as Stored),
-        })),
-        map(({ next, items }) => ({
-          next: items.length ? next : undefined,
-          items,
-        }))
-      )
-    );
-  }
-
   get tableArn(): string {
     if (!this._tableArn) {
       throw new RetryError(
@@ -270,6 +204,15 @@ export class DynamoDbProvider<T> extends Provider<T> {
       );
     }
     return this._streamArn;
+  }
+
+  get shards(): Shards<T> {
+    if (!this._shards) {
+      throw new RetryError(
+        "Shards are not available yet. Please call init() first."
+      );
+    }
+    return this._shards;
   }
 
   private get table(): Observable<{

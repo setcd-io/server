@@ -1,5 +1,6 @@
 services:
   etcd:
+    tty: true
     build:
       context: .
       dockerfile: Dockerfile
