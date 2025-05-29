@@ -2,6 +2,8 @@ import {
   asyncScheduler,
   BehaviorSubject,
   Observable,
+  OperatorFunction,
+  ReplaySubject,
   Subscription,
 } from "rxjs";
 
@@ -287,4 +289,57 @@ export function subscribe<T>(
   });
 
   return subscription;
+}
+
+export function tail<T>(count?: number): OperatorFunction<T, T> {
+  return (source: Observable<T>) =>
+    new Observable<T>((observer) => {
+      const buffer$ = new ReplaySubject<T>(count);
+      const srcSub = source.subscribe({
+        next(value) {
+          buffer$.next(value);
+        },
+        error(err) {
+          observer.error(err);
+        },
+        complete() {
+          observer.complete();
+        },
+      });
+
+      const bufSub = buffer$.subscribe({
+        next(value) {
+          observer.next(value);
+        },
+        error(err) {
+          observer.error(err);
+        },
+      });
+
+      return () => {
+        srcSub.unsubscribe();
+        bufSub.unsubscribe();
+      };
+    });
+}
+
+export function tailFrom<T>(
+  source: Observable<T>,
+  count?: number
+): Promise<T[]> {
+  return new Promise<T[]>((resolve, reject) => {
+    const results: T[] = [];
+
+    const sub = source.pipe(tail(count)).subscribe({
+      next(value) {
+        results.push(value);
+      },
+      error(err) {
+        reject(err);
+      },
+    });
+
+    sub.unsubscribe();
+    resolve(results);
+  });
 }

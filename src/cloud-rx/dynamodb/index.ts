@@ -16,8 +16,11 @@ import {
 import { DynamoDBDocument } from "@aws-sdk/lib-dynamodb";
 import {
   asyncScheduler,
+  BehaviorSubject,
   catchError,
+  concatAll,
   defer,
+  EMPTY,
   filter,
   forkJoin,
   from,
@@ -29,6 +32,7 @@ import {
   of,
   ReplaySubject,
   startWith,
+  Subject,
   switchMap,
   take,
   takeUntil,
@@ -48,7 +52,7 @@ import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
 import { Shard, Shards } from "./shards";
-import { observe } from "../util";
+import { observe, tail } from "../util";
 
 export type DynamoDbOptions<T> = {
   hashKey: string;
@@ -77,7 +81,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
                 )}`
               )
             );
-            this._shards = new Shards(this, streamArn, this.signal);
+            this.shards.next(new Shards(this, streamArn, this.signal));
           }
           return this;
         })
@@ -106,51 +110,8 @@ export class DynamoDbProvider<T> extends Provider<T> {
       });
   }
 
-  override async all(
-    partition: StoredPartition,
-    startKey?: StoredKey
-  ): Promise<Stored[]> {
-    return this.documentClient
-      .query({
-        TableName: this.tableName,
-        KeyConditionExpression: "#hash = :hash AND begins_with(#range, :range)",
-        ExpressionAttributeNames: {
-          "#hash": this.opts.hashKey,
-          "#range": this.opts.rangeKey,
-        },
-        ExpressionAttributeValues: {
-          ":hash": partition.partition,
-          ":range": "",
-        },
-        ExclusiveStartKey: startKey,
-        ConsistentRead: this.consistency !== "none",
-      })
-      .then(async (res) => {
-        const items = (res.Items || []) as Stored[];
-        const next = await this.all(
-          partition,
-          res.LastEvaluatedKey as StoredKey
-        );
-        return [...items, ...next];
-      });
-  }
-
-  override async oldest(
-    partition: StoredPartition
-  ): Promise<Stored | undefined> {
-    return lastValueFrom(
-      this.observeAll()
-        .pipe(filter((shard) => shard.partition === partition.partition))
-        .pipe(take(1))
-    );
-  }
-
-  override observeAll(): Observable<Stored> {
-    return this.shards.observe("ALL");
-  }
-
-  override observeLatest(): Observable<Stored> {
-    return this.shards.observe("LATEST");
+  override observe(): Observable<Stored> {
+    return this.shards.pipe(switchMap((shards) => shards.records$));
   }
 
   override repr(): string {
@@ -163,7 +124,8 @@ export class DynamoDbProvider<T> extends Provider<T> {
 
   private _tableArn?: string;
   private _streamArn?: string;
-  private _shards?: Shards<T>;
+
+  private shards: ReplaySubject<Shards<T>> = new ReplaySubject(1);
 
   constructor(private opts: DynamoDbOptions<T>) {
     super(opts.signal, opts.consistency || "weak", opts.serializers);
@@ -204,15 +166,6 @@ export class DynamoDbProvider<T> extends Provider<T> {
       );
     }
     return this._streamArn;
-  }
-
-  get shards(): Shards<T> {
-    if (!this._shards) {
-      throw new RetryError(
-        "Shards are not available yet. Please call init() first."
-      );
-    }
-    return this._shards;
   }
 
   private get table(): Observable<{

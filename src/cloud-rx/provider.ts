@@ -1,24 +1,32 @@
 import {
+  asapScheduler,
   asyncScheduler,
+  AsyncSubject,
+  catchError,
   combineLatest,
   filter,
   first,
+  firstValueFrom,
   forkJoin,
   from,
+  lastValueFrom,
   map,
   Observable,
   observeOn,
   of,
+  ReplaySubject,
   share,
   shareReplay,
   skipUntil,
   switchMap,
   take,
   tap,
+  timeout,
 } from "rxjs";
 import util from "util";
 import { random } from "timeflake";
 import { observe } from "./util";
+import EventEmitter from "events";
 
 export type StoredPartition = {
   partition: string;
@@ -48,14 +56,10 @@ export abstract class Provider<T> {
   abstract init(id: string): Promise<this>;
   abstract put(item: Stored): Promise<Stored>;
   abstract get(key: StoredKey): Promise<Stored>;
-  abstract oldest(partition: StoredPartition): Promise<Stored | undefined>;
-  abstract all(partition: StoredPartition): Promise<Stored[]>;
-  abstract observeAll(): Observable<Stored>;
-  abstract observeLatest(): Observable<Stored>;
   abstract repr(): string;
+  abstract observe(): Observable<Stored>;
 
   protected _id?: string;
-  private latest$?: Observable<Stored>;
 
   constructor(
     public readonly signal: AbortSignal,
@@ -100,34 +104,69 @@ export abstract class Provider<T> {
       return this.put(stored).then(() => this.get(stored));
     }
 
-    asyncScheduler.schedule(() => {
-      this.put(stored);
-    });
+    return lastValueFrom(
+      this.observe()
+        .pipe(skipUntil(this.put(stored)))
+        .pipe(
+          filter((item) => {
+            return (
+              item.partition === stored.partition &&
+              item.timeflake === stored.timeflake &&
+              item.hash === stored.hash
+            );
+          }),
+          take(1)
+        )
+    );
 
-    if (!this.latest$) {
-      this.latest$ = this.observeLatest().pipe(
-        // share()
-        shareReplay({
-          // scheduler: asyncScheduler,
-          windowTime: 1000,
-          refCount: false,
-        })
-      );
-    }
+    // return this.put(stored).then(() => this.get(stored));
 
-    let iterations = 0;
-    for await (const streamed of observe(this.latest$)) {
-      iterations++;
-      if (
-        streamed.partition === stored.partition &&
-        streamed.timeflake === stored.timeflake &&
-        streamed.hash === stored.hash
-      ) {
-        return streamed;
-      }
-    }
+    // if (!this.tail$) {
+    //   this.tail$ = this.tail("ALL");
+    //   const test = this.tail$.subscribe((item) => {
+    //     console.log("!!! tail", item);
+    //   });
+    // }
+    // if (!this.latest$) {
+    //   this.latest$ = .pipe(
+    //     shareReplay({
+    //       windowTime: 1000,
+    //       refCount: false,
+    //     })
+    //   );
 
-    throw new Error("Consistency error: Item not streamed");
+    //   const test = this.latest$.subscribe((item) => {
+    //     console.log("!!! Latest", item);
+    //   });
+    // }
+
+    // console.log("!!! Persisting");
+    // await this.put(stored);
+    // console.log("!!! Persisted");
+
+    // for await (const streamed of observe(this.tail$)) {
+    //   console.log("!!! Streamed", streamed);
+    //   if (
+    //     streamed.partition === stored.partition &&
+    //     streamed.timeflake === stored.timeflake &&
+    //     streamed.hash === stored.hash
+    //   ) {
+    //     return streamed as Stored;
+    //   }
+    // }
+
+    // return await firstValueFrom(
+    //   this.tail("LATEST")
+    //     .pipe(skipUntil(this.put(stored)))
+    //     .pipe(
+    //       filter((item) => {
+    //         console.log("!!! Filtering", item);
+    //         return true;
+    //       })
+    //     )
+    // );
+
+    // throw new Error("Consistency error: Item not streamed");
   }
 
   toString(): string {

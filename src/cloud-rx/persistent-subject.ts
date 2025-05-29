@@ -1,7 +1,21 @@
-import { Subject, Subscription, switchMap, Subscriber, from } from "rxjs";
-import { Consistency, Provider } from "./provider";
+import {
+  Subject,
+  Subscription,
+  switchMap,
+  Subscriber,
+  from,
+  filter,
+  map,
+  Observable,
+  OperatorFunction,
+  concatMap,
+  firstValueFrom,
+  toArray,
+  tap,
+} from "rxjs";
+import { Consistency, Provider, Stored } from "./provider";
 import _ from "lodash";
-import { subscribe } from "./util";
+import { tail, tailFrom } from "./util";
 
 export class PersistentSubject<T> extends Subject<T> {
   private signal: AbortSignal | undefined;
@@ -27,16 +41,17 @@ export class PersistentSubject<T> extends Subject<T> {
 
     this.subscriptions.push(
       this._incoming
-        .pipe(switchMap((value) => from(provider.persist(value))))
+        .pipe(concatMap((value) => from(provider.persist(value))))
         .subscribe()
     );
   }
 
-  async all(partition: string): Promise<T[]> {
-    // TODO: delete old items
-    return this.provider
-      .all({ partition })
-      .then((items) => items.map((item) => this.provider.convert(item)));
+  async all(): Promise<T[]> {
+    return tailFrom(
+      this.provider
+        .observe()
+        .pipe(map((item) => this.provider.convert(item as Stored)))
+    );
   }
 
   override next(value: T): void {
@@ -44,9 +59,9 @@ export class PersistentSubject<T> extends Subject<T> {
   }
 
   protected _subscribe(subscriber: Subscriber<T>): Subscription {
-    return this.provider.observeLatest().subscribe({
+    return this.provider.observe().subscribe({
       next: (item) => {
-        subscriber.next(this.provider.convert(item));
+        subscriber.next(this.provider.convert(item as Stored));
       },
       error: (err) => {
         subscriber.error(err);

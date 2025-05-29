@@ -7,13 +7,26 @@ import {
 } from "@setcd-io/connectrpc-etcd";
 import Context from "../context";
 import { deserialize, serialize } from "./serde";
-import { bufferTime, filter, Observable, share, takeUntil, timer } from "rxjs";
+import {
+  asyncScheduler,
+  bufferTime,
+  filter,
+  Observable,
+  observeOn,
+  share,
+  takeUntil,
+  tap,
+  timer,
+  toArray,
+  windowTime,
+} from "rxjs";
 import { QueryCommandInput } from "@aws-sdk/lib-dynamodb";
 import _ from "lodash";
 import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { PersistentSubject } from "../cloud-rx";
+import { tail } from "../cloud-rx/util";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -80,6 +93,7 @@ export type TenantHistory = {
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   private history: PersistentSubject<TenantHistory>;
+  // private _history$: Observable<TenantHistory>;
 
   constructor(ctx: Context) {
     super(ctx, "kv");
@@ -87,6 +101,8 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     this.history = new PersistentSubject<TenantHistory>(ctx.historyStorage, {
       signal: ctx.signal,
     });
+
+    // this._history$ = this.history.pipe(observeOn(asyncScheduler), share());
 
     // const expiration = this.history.expired
     //   .pipe(switchMap((h) => this.deleteKey(h.tenant, h.current.key)))
@@ -100,9 +116,8 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   public history$(tenant: string): Observable<TenantHistory[]> {
     return this.history.pipe(
       filter((h) => h.tenant === tenant),
-      bufferTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT, HISTORY_BATCH_SIZE),
-      filter((histories) => !!histories.length),
-      share()
+      bufferTime(HISTORY_TIMEOUT),
+      filter((histories) => !!histories.length)
     );
   }
 
@@ -649,11 +664,15 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     key: Uint8Array | string,
     revision?: number
   ): Promise<TenantHistory | undefined> {
+    console.log("!!! Latest Request", { tenant, key, revision });
     if (key instanceof Uint8Array) {
       key = serialize(key, "utf8", true);
     }
 
-    const all = await this.history.all(tenant);
+    const all = (await this.history.all()).filter(
+      (h) =>
+        h.tenant === tenant && serialize(h.current.key, "utf8", true) === key
+    );
 
     if (!revision) {
       return all.slice(-1)[0];
