@@ -124,7 +124,9 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       concatMap((window) => window.pipe(toArray())),
       tap((histories) => {
         console.log("!!! emitting history", histories);
-      })
+      }),
+      share(),
+      observeOn(asyncScheduler)
       // filter((histories) => !!histories.length)
     );
     // if (this.histories.has(tenant)) {

@@ -108,13 +108,28 @@ export abstract class BaseHandler {
     const connectionId = this.getConnectionId(ctx);
     const responses = new Subject<StreamResponse<Req, Res>>();
 
-    const subscriptions: Subscription[] = [
-      responses.subscribe({
+    const subscriptions: Map<
+      string,
+      {
+        completion?: Subscription;
+        requestToResponse?: Subscription;
+        historyToResponse?: Subscription;
+        errorToRequest?: Subscription;
+      }
+    > = new Map();
+
+    subscriptions.set(connectionId, {
+      completion: responses.subscribe({
         complete: () => {
-          subscriptions.forEach((sub) => sub.unsubscribe());
+          subscriptions.forEach((sub) => {
+            sub.completion?.unsubscribe();
+            sub.requestToResponse?.unsubscribe();
+            sub.historyToResponse?.unsubscribe();
+            sub.errorToRequest?.unsubscribe();
+          });
         },
       }),
-    ];
+    });
 
     ctx.signal.addEventListener("abort", () => {
       abort.abort(new Error("Context aborted"));
@@ -128,8 +143,8 @@ export abstract class BaseHandler {
 
         const requestId = nanoid();
 
-        subscriptions.push(
-          of(request)
+        subscriptions.set(requestId, {
+          requestToResponse: of(request)
             .pipe(
               mappers.requestToResponse(
                 tenant,
@@ -138,45 +153,42 @@ export abstract class BaseHandler {
                 abort.signal
               )
             )
-            .subscribe((res) => responses.next(res))
-        );
+            .subscribe((res) => responses.next(res)),
+          errorToRequest: mappers.errorToRequest
+            ? fromEvent(abort.signal, "abort")
+                .pipe(
+                  take(1),
+                  map(() => {
+                    if (abort.signal.reason.name === "AbortError") {
+                      console.log(
+                        chalk.yellow(`[con:${connectionId}] Connection Closed`)
+                      );
+                    } else {
+                      console.warn(
+                        chalk.red(
+                          `[con:${connectionId}] Connection Aborted: ${abort.signal.reason.message}`
+                        )
+                      );
+                    }
 
-        if (mappers.errorToRequest) {
-          subscriptions.push(
-            fromEvent(abort.signal, "abort")
-              .pipe(
-                take(1),
-                map(() => {
-                  if (abort.signal.reason.name === "AbortError") {
-                    console.log(
-                      chalk.yellow(`[con:${connectionId}] Connection Closed`)
-                    );
-                  } else {
-                    console.warn(
-                      chalk.red(
-                        `[con:${connectionId}] Connection Aborted: ${abort.signal.reason.message}`
-                      )
-                    );
-                  }
-
-                  return abort.signal.reason;
-                }),
-                mappers.errorToRequest(
-                  tenant,
-                  connectionId,
-                  requestId,
-                  abort.signal
-                ),
-                mappers.requestToResponse(
-                  tenant,
-                  connectionId,
-                  requestId,
-                  abort.signal
+                    return abort.signal.reason;
+                  }),
+                  mappers.errorToRequest(
+                    tenant,
+                    connectionId,
+                    requestId,
+                    abort.signal
+                  ),
+                  mappers.requestToResponse(
+                    tenant,
+                    connectionId,
+                    requestId,
+                    abort.signal
+                  )
                 )
-              )
-              .subscribe((res) => responses.next(res))
-          );
-        }
+                .subscribe((res) => responses.next(res))
+            : undefined,
+        });
       }
     })()
       .catch((e) => {
@@ -205,21 +217,24 @@ export abstract class BaseHandler {
         await callbacks.onResponse(tenant, connectionId, response);
       }
 
-      if (mappers.historyToResponse) {
-        subscriptions.push(
-          sources.history
-            .pipe(map((his) => his.filter(filters.history)))
-            .pipe(
-              mappers.historyToResponse(
-                tenant,
-                connectionId,
-                response.requestId,
-                abort.signal
-              )
-            )
-            .subscribe((res) => responses.next(res))
-        );
-      }
+      subscriptions.set(response.requestId, {
+        ...subscriptions.get(response.requestId),
+        historyToResponse:
+          subscriptions.get(connectionId)?.historyToResponse ||
+          mappers.historyToResponse
+            ? sources.history
+                .pipe(map((his) => his.filter(filters.history)))
+                .pipe(
+                  mappers.historyToResponse!(
+                    tenant,
+                    connectionId,
+                    response.requestId,
+                    abort.signal
+                  )
+                )
+                .subscribe((res) => responses.next(res))
+            : undefined,
+      });
 
       yield response.response;
     }
