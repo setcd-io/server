@@ -10,10 +10,13 @@ import { deserialize, serialize } from "./serde";
 import {
   asyncScheduler,
   bufferTime,
+  concatAll,
+  concatMap,
   filter,
   Observable,
   observeOn,
   share,
+  shareReplay,
   takeUntil,
   tap,
   timer,
@@ -94,6 +97,7 @@ export type TenantHistory = {
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   private history: PersistentSubject<TenantHistory>;
   // private _history$: Observable<TenantHistory>;
+  private histories: Map<string, Observable<TenantHistory[]>> = new Map();
 
   constructor(ctx: Context) {
     super(ctx, "kv");
@@ -116,9 +120,28 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   public history$(tenant: string): Observable<TenantHistory[]> {
     return this.history.pipe(
       filter((h) => h.tenant === tenant),
-      bufferTime(HISTORY_TIMEOUT),
-      filter((histories) => !!histories.length)
+      windowTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT * 2, HISTORY_BATCH_SIZE),
+      concatMap((window) => window.pipe(toArray())),
+      tap((histories) => {
+        console.log("!!! emitting history", histories);
+      })
+      // filter((histories) => !!histories.length)
     );
+    // if (this.histories.has(tenant)) {
+    //   return this.histories.get(tenant)!;
+    // }
+
+    // this.histories.set(
+    //   tenant,
+    //   this.history.pipe(
+    //     filter((h) => h.tenant === tenant),
+    //     bufferTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT * 2, HISTORY_BATCH_SIZE),
+    //     filter((histories) => !!histories.length),
+    //     shareReplay({ refCount: false, scheduler: asyncScheduler })
+    //   )
+    // );
+
+    // return this.histories.get(tenant)!;
   }
 
   async putKey(

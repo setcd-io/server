@@ -14,6 +14,7 @@ import {
   concatMap,
   delay,
   distinct,
+  distinctUntilChanged,
   filter,
   from,
   fromEvent,
@@ -297,25 +298,42 @@ export class Shards<T> {
         )
       )
       .subscribe((updated) => {
-        root.next(updated);
+        if (
+          !_.isEqual(
+            root.value
+              .all((node) => !node.isRoot())
+              .map((node) => node.model as Shard<T>)
+              .map((shard) => shard.shardId)
+              .sort(),
+            updated
+              .all((node) => !node.isRoot())
+              .map((node) => node.model as Shard<T>)
+              .map((shard) => shard.shardId)
+              .sort()
+          )
+        ) {
+          root.next(updated);
+        }
       });
 
-    this.records$ = root
-      .pipe(
-        // NOTE: pre == timeline-ordered traversal
-        map((root) => root.all({ strategy: "pre" }, (node) => !node.isRoot())),
-        filter((shards) => !!shards.length),
-        concatAll(),
-        map((node) => node.model as Shard<T>),
-        distinct((shard) => shard.shardId),
-        tap((shard) =>
-          console.log(
-            chalk.green(`Shard Discovered: ${chalk.bold(shard.toString())}`)
-          )
-        ),
-        concatMap((shard) => shard.records$)
-      )
-      .pipe(share());
+    this.records$ = root.pipe(
+      // NOTE: pre == timeline-ordered traversal
+      map((root) => root.all({ strategy: "pre" }, (node) => !node.isRoot())),
+      filter((shards) => !!shards.length),
+      concatAll(),
+      map((node) => node.model as Shard<T>),
+      distinct((shard) => shard.shardId),
+      tap((shard) =>
+        console.log(
+          chalk.green(`Shard Discovered: ${chalk.bold(shard.toString())}`)
+        )
+      ),
+      concatMap((shard) => shard.records$),
+      shareReplay({
+        refCount: false,
+        scheduler: asyncScheduler,
+      })
+    );
 
     signal.addEventListener("abort", () => {
       // stats.unsubscribe();
