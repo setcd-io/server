@@ -120,11 +120,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   public history$(tenant: string): Observable<TenantHistory[]> {
     return this.history.pipe(
       filter((h) => h.tenant === tenant),
-      windowTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT * 2, HISTORY_BATCH_SIZE),
-      concatMap((window) => window.pipe(toArray())),
-      tap((histories) => {
-        console.log("!!! emitting history", histories);
-      }),
+      bufferTime(100, undefined, 10),
       share(),
       observeOn(asyncScheduler)
       // filter((histories) => !!histories.length)
@@ -214,13 +210,14 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
         current.createRevision = previous.createRevision;
         current.version = previous.version + 1;
         current.expires = previous.expires;
-        this.history.next({
+        const historyEvent = {
           tenant,
-          action: "PUT",
+          action: "PUT" as const,
           current: intoKv(current),
           previous: intoKv(previous),
           expires: current.expires,
-        });
+        };
+        this.history.next(historyEvent);
         return { current, previous };
       }
     } catch (e) {
@@ -251,12 +248,13 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
 
       current = Attributes;
 
-      this.history.next({
+      const historyEvent = {
         tenant,
-        action: "PUT",
+        action: "PUT" as const,
         current: intoKv(current),
         expires: current.expires,
-      });
+      };
+      this.history.next(historyEvent);
 
       return {
         current,
@@ -689,7 +687,6 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     key: Uint8Array | string,
     revision?: number
   ): Promise<TenantHistory | undefined> {
-    console.log("!!! Latest Request", { tenant, key, revision });
     if (key instanceof Uint8Array) {
       key = serialize(key, "utf8", true);
     }

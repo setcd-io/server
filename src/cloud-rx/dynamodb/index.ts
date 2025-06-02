@@ -19,6 +19,7 @@ import {
   BehaviorSubject,
   catchError,
   concatAll,
+  concatMap,
   defer,
   EMPTY,
   filter,
@@ -51,7 +52,7 @@ import {
 import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
-import { Shard, Shards } from "./shards";
+import { Shards } from "./shards";
 import { observe, tail } from "../util";
 
 export type DynamoDbOptions<T> = {
@@ -81,7 +82,13 @@ export class DynamoDbProvider<T> extends Provider<T> {
                 )}`
               )
             );
-            this.shards.next(new Shards(this, streamArn, this.signal));
+            this.shards.next(
+              new Shards(
+                this as DynamoDbProvider<unknown>,
+                streamArn,
+                this.signal
+              )
+            );
           }
           return this;
         })
@@ -111,7 +118,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
   }
 
   override observe(): Observable<Stored> {
-    return this.shards.pipe(switchMap((shards) => shards.records$));
+    return this.shards.pipe(concatMap((shards) => shards.asObservable()));
   }
 
   override repr(): string {
@@ -125,7 +132,7 @@ export class DynamoDbProvider<T> extends Provider<T> {
   private _tableArn?: string;
   private _streamArn?: string;
 
-  private shards: ReplaySubject<Shards<T>> = new ReplaySubject(1);
+  private shards: ReplaySubject<Shards<Stored>> = new ReplaySubject(1);
 
   constructor(private opts: DynamoDbOptions<T>) {
     super(opts.signal, opts.consistency || "weak", opts.serializers);

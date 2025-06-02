@@ -285,7 +285,7 @@ export class WatchHandler extends BaseHandler {
                         ) {
                           source.requestUnion.value.startRevision =
                             BigInt(currentRevision);
-                        }
+}
 
                         return {
                           tenant,
@@ -477,15 +477,17 @@ export class WatchHandler extends BaseHandler {
                         $typeName: "etcdserverpb.WatchResponse",
                         watchId: BigInt(watchId),
                         compactRevision: 0n,
-                        events: histories.map((history) => ({
-                          $typeName: "mvccpb.Event",
-                          type:
-                            history.action === "PUT"
-                              ? Event_EventType.PUT
-                              : Event_EventType.DELETE,
-                          kv: history.current,
-                          prevKv: history.previous,
-                        })),
+                        events: histories.map((history) => {
+return {
+                            $typeName: "mvccpb.Event",
+                            type:
+                              history.action === "PUT"
+                                ? Event_EventType.PUT
+                                : Event_EventType.DELETE,
+                            kv: history.current,
+                            prevKv: history.previous,
+                          };
+                        }),
                         canceled: false,
                         cancelReason: "",
                         created: false,

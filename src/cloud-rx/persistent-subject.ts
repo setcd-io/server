@@ -11,26 +11,38 @@ import {
   concatMap,
   firstValueFrom,
   toArray,
-  tap,
+  shareReplay,
+  asyncScheduler,
+  ReplaySubject,
 } from "rxjs";
 import { Consistency, Provider, Stored } from "./provider";
 import _ from "lodash";
-import { tail, tailFrom } from "./util";
+import { tailFrom } from "./util";
 
 export class PersistentSubject<T> extends Subject<T> {
   private signal: AbortSignal | undefined;
   private subscriptions: Subscription[] = [];
 
   private _incoming = new Subject<T>();
+  private observe$: Observable<Stored>;
 
   constructor(
     private readonly provider: Provider<T>,
-    private readonly opts?: {
+    opts?: {
       signal?: AbortSignal;
       consistency?: Consistency; // TODO: provider.withConsistency: makes new provider
     }
   ) {
     super();
+
+    this.observe$ = provider
+      .observe()
+      .pipe(
+        shareReplay({ refCount: false, scheduler: asyncScheduler })
+      );
+
+    // Force initial subscription to start the stream
+    this.subscriptions.push(this.observe$.subscribe());
 
     if (opts?.signal) {
       this.signal = opts.signal;
@@ -48,9 +60,7 @@ export class PersistentSubject<T> extends Subject<T> {
 
   async all(): Promise<T[]> {
     return tailFrom(
-      this.provider
-        .observe()
-        .pipe(map((item) => this.provider.convert(item as Stored)))
+      this.observe$.pipe(map((item) => this.provider.convert(item as Stored)))
     );
   }
 
@@ -59,7 +69,7 @@ export class PersistentSubject<T> extends Subject<T> {
   }
 
   protected _subscribe(subscriber: Subscriber<T>): Subscription {
-    return this.provider.observe().subscribe({
+    return this.observe$.subscribe({
       next: (item) => {
         subscriber.next(this.provider.convert(item as Stored));
       },

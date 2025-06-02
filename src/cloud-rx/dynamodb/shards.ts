@@ -1,343 +1,211 @@
 import TreeModel from "tree-model";
 import {
-  Shard as _Shard,
   DescribeStreamCommand,
-  GetRecordsCommand,
-  GetShardIteratorCommand,
 } from "@aws-sdk/client-dynamodb-streams";
 import { DynamoDbProvider } from ".";
 import {
-  asyncScheduler,
-  BehaviorSubject,
   catchError,
   concatAll,
   concatMap,
-  delay,
-  distinct,
-  distinctUntilChanged,
-  filter,
+  EMPTY,
   from,
-  fromEvent,
-  last,
   map,
-  Observable,
-  observeOn,
-  of,
+  mergeAll,
+  mergeMap,
+  Observer,
+  reduce,
   ReplaySubject,
-  share,
-  shareReplay,
   startWith,
   Subject,
   Subscription,
   switchMap,
-  take,
-  takeUntil,
-  tap,
-  throwError,
   timer,
+  toArray,
 } from "rxjs";
-import _, { concat } from "lodash";
-import { unmarshall } from "@aws-sdk/util-dynamodb";
-import { Stored } from "../provider";
-import chalk from "chalk";
+import _ from "lodash";
+import { ShardIterator } from "./iterator";
 
-export type Position = {
-  sequence?: string;
-  iterator?: string;
-};
-
-export class Shard<T> {
-  public readonly shardId: string;
-  public readonly parentShardId?: string;
-  private records: number = 0;
-  private iterations: number = 0;
-
-  private incoming: Subject<Stored> = new Subject();
-  public readonly records$: Observable<Stored> = this.incoming.pipe(
-    shareReplay({ refCount: false, scheduler: asyncScheduler })
-  );
+export class Shards<T> extends Subject<T> {
+  private iterators = new Subject<ShardIterator>();
 
   constructor(
-    public readonly provider: DynamoDbProvider<T>,
-    private readonly tree: TreeModel.Node<Shard<T>>,
-    public readonly stream: string,
-    shard: _Shard
-  ) {
-    this.shardId = shard.ShardId!;
-    this.parentShardId = shard.ParentShardId;
-
-    console.log(
-      chalk.blue(`Observation Starting: ${chalk.bold(this.toString())}`)
-    );
-
-    const observation = this.observe().subscribe({
-      next: (stored) => {
-        this.records++;
-        this.incoming.next(stored);
-      },
-      complete: () => {
-        console.log(
-          chalk.green(`Observation Complete: ${chalk.bold(this.toString())}`)
-        );
-        this.incoming.complete();
-        observation.unsubscribe();
-      },
-      error: (err) => {
-        console.warn(
-          chalk.red(`Error observing shard ${this.shardId}: ${err.message}`)
-        );
-        this.incoming.error(err);
-        observation.unsubscribe();
-      },
-    });
-  }
-
-  private observe(): Observable<Stored> {
-    const position = new BehaviorSubject<Position>({});
-    // Position preference:
-    // 1. iterator
-    // 2. sequence
-    // 3. boundary
-    // Note: Position is updated in record$ mapping below
-    // TODO: save/load position to/from table tags for restartability
-    const command$ = position.pipe(
-      concatMap((position) => {
-        return from(
-          position.iterator
-            ? Promise.resolve(
-                new GetRecordsCommand({
-                  ShardIterator: position.iterator,
-                })
-              )
-            : this.provider.streamClient
-                .send(
-                  new GetShardIteratorCommand({
-                    ShardId: this.shardId,
-                    StreamArn: this.stream,
-                    ShardIteratorType: "TRIM_HORIZON",
-                  }),
-                  { abortSignal: this.provider.signal }
-                )
-                .then((res) => {
-                  return new GetRecordsCommand({
-                    ShardIterator: res.ShardIterator,
-                  });
-                })
-        ).pipe(map((cmd) => ({ cmd, position })));
-      })
-    );
-
-    return command$.pipe(
-      concatMap(({ cmd, position: pos }) =>
-        from(
-          this.provider.streamClient.send(cmd, {
-            abortSignal: this.provider.signal,
-          })
-        ).pipe(
-          catchError((err) => {
-            console.warn(
-              chalk.yellow(`WARN: ${err.name} for ${this.toString()}`),
-              { input: cmd.input, position: pos }
-            );
-
-            if (
-              err.name === "TrimmedDataAccessException" ||
-              err.name === "ResourceNotFoundException"
-            ) {
-              // DEVNOTE: This happens with DynamoDB Local when the table is brand new
-              return of({
-                Records: [],
-                NextShardIterator: undefined,
-              });
-            }
-
-            return throwError(() => err);
-          }),
-          map((res) => {
-            this.iterations++;
-            const records = (res.Records || []).sort((a, b) => {
-              const aSeq = a.dynamodb?.SequenceNumber;
-              const bSeq = b.dynamodb?.SequenceNumber;
-              if (aSeq && bSeq) {
-                return aSeq.localeCompare(bSeq);
-              }
-              return 0;
-            });
-
-            if (res.NextShardIterator) {
-              position.next({
-                iterator: res.NextShardIterator,
-                sequence: records.slice(-1)[0]?.dynamodb?.SequenceNumber,
-              });
-            } else {
-              position.complete();
-            }
-
-            return { records };
-          }),
-          map(({ records }) => {
-            const items = records
-              .filter((record) => {
-                if (record.eventName === "REMOVE") {
-                  // TODO: emit REMOVE (aka expire) events
-                  //       Q: do i simply convert to a Stored DELETE object, or
-                  //          should i emit a REMOVE event?
-                  return false;
-                }
-                if (!record.dynamodb?.NewImage) {
-                  return false;
-                }
-                return true;
-              })
-              .map(
-                (record) => unmarshall(record.dynamodb?.NewImage!) as Stored
-              );
-
-            return items;
-          })
-        )
-      ),
-      concatAll()
-    );
-  }
-
-  toString(): string {
-    const repr = `id=${this.shardId} iterations=${this.iterations} records=${this.records}`;
-    let type = this.parentShardId ? "Child" : "Parent";
-    if (!this.tree.first((node) => node.model.shardId === this.parentShardId)) {
-      type = `Orphaned${type}`;
-    }
-    const display = `${type}Shard[${this.provider.id}](${repr})`;
-    return display;
-  }
-}
-
-export class Shards<T> {
-  // private root: Observable<TreeModel.Node<Shard<T>>>;
-  public records$: Observable<Stored>;
-
-  constructor(
-    private readonly provider: DynamoDbProvider<T>,
+    private readonly provider: DynamoDbProvider<unknown>,
     stream: string,
     signal: AbortSignal
   ) {
+    super();
+
     const tree = new TreeModel();
-    const root: BehaviorSubject<TreeModel.Node<Shard<T>>> = new BehaviorSubject(
-      tree.parse({ id: "root", children: [] })
-    );
+    const root = new ShardIterator(provider, stream);
+    const rootNode = tree.parse(root);
 
-    // const stats = root.subscribe((root) => {
-    //   root.walk((node) => {
-    //     if (node.isRoot()) {
-    //       console.log("Shards:");
-    //       return true;
-    //     }
+    // this.root = root.withNode(rootNode);
 
-    //     const depth = node.getPath().length - 1;
-    //     const indent = " ".repeat(depth * 3 - 3);
+    // const root = tree.parse<Shard<T>>(new Shard<T>(this.provider, stream));
 
-    //     const parent = node.parent as TreeModel.Node<any> | null;
-    //     const isLast = parent
-    //       ? node === parent.children[parent.children.length - 1]
-    //       : true;
-
-    //     const glyph = depth === 0 ? "" : isLast ? "└─ " : "├─ ";
-
-    //     console.log(indent + glyph + node.model.toString());
+    // root.walk((node) => {
+    //   if (node.isRoot()) {
+    //     console.log("Shards:");
     //     return true;
-    //   });
+    //   }
 
-    //   // root.walk({ strategy: "pre" }, (node) => {
-    //   //   if (node.isRoot()) {
-    //   //     console.log("ROOT");
-    //   //     return true;
-    //   //   }
-    //   //   console.log(` -> ${node.model.shardId}`);
-    //   //   return true;
-    //   // });
+    //   const depth = node.getPath().length - 1;
+    //   const indent = " ".repeat(depth * 3 - 3);
+
+    //   const parent = node.parent as TreeModel.Node<any> | null;
+    //   const isLast = parent
+    //     ? node === parent.children[parent.children.length - 1]
+    //     : true;
+
+    //   const glyph = depth === 0 ? "" : isLast ? "└─ " : "├─ ";
+
+    //   const shard = node.model as Shard<T>;
+    //   tailFrom(shard.records$).then((tail) => {
+    //     console.log(
+    //       `${indent}${glyph}${node.model.toString()}, actual: ${
+    //         tail.length
+    //       }`
+    //     );
+    //   });
+    //   return true;
     // });
 
-    const shards = timer(0, 5000)
+    const iterators = timer(0, 1000)
       .pipe(
         startWith(0),
-        map(() => root.value),
-        switchMap((root) =>
+        switchMap(() =>
           from(
             provider.streamClient
               .send(new DescribeStreamCommand({ StreamArn: stream }))
-              .then((data) => data.StreamDescription?.Shards || [])
+              .then((data) => {
+                // console.log("!!! DescribeStream result:", {
+                //   streamArn: stream,
+                //   shardCount: data.StreamDescription?.Shards?.length || 0,
+                //   shards: data.StreamDescription?.Shards?.map(s => ({
+                //     id: s.ShardId,
+                //     parent: s.ParentShardId,
+                //     start: s.SequenceNumberRange?.StartingSequenceNumber,
+                //     end: s.SequenceNumberRange?.EndingSequenceNumber
+                //   })) || []
+                // });
+                return data.StreamDescription?.Shards || [];
+              })
           ).pipe(
-            filter((shards) => !!shards.length),
-            concatAll(),
-            map((shard) => ({
-              shard,
-              root,
-            })),
-            map(({ shard, root }) => {
-              let parent = shard.ParentShardId
-                ? root.first(
+            reduce((acc, shards) => {
+              const absent = shards.filter(
+                (shard) => {
+                  const exists = !!rootNode.first(
                     (node) =>
-                      (node.model as Shard<T>).shardId === shard.ParentShardId
-                  )
-                : root;
-
-              const existing = root.first(
-                (node) => (node.model as Shard<T>).shardId === shard.ShardId
+                      (node.model as ShardIterator).shardId === shard.ShardId
+                  );
+                  return !exists;
+                }
               );
 
-              if (!existing) {
-                (parent || root).addChild(
-                  tree.parse(new Shard<T>(this.provider, root, stream, shard))
-                );
-              }
+              const newIterators = absent.map(
+                (shard) => {
+                  return new ShardIterator(this.provider, stream, shard);
+                }
+              );
+              acc.push(...newIterators);
+              return acc;
+            }, [] as ShardIterator[]),
+            mergeAll(), // or concatAll()?
+            map((shard) => {
+              const parent =
+                rootNode.first(
+                  (node) =>
+                    (node.model as ShardIterator).shardId ===
+                    shard.parentShardId
+                ) || rootNode;
 
-              return root;
+              const node = parent.addChild(tree.parse(shard));
+
+              return node;
             }),
-            last()
+            toArray()
           )
         )
       )
-      .subscribe((updated) => {
-        if (
-          !_.isEqual(
-            root.value
-              .all((node) => !node.isRoot())
-              .map((node) => node.model as Shard<T>)
-              .map((shard) => shard.shardId)
-              .sort(),
-            updated
-              .all((node) => !node.isRoot())
-              .map((node) => node.model as Shard<T>)
-              .map((shard) => shard.shardId)
-              .sort()
-          )
-        ) {
-          root.next(updated);
-        }
+      .pipe(
+        map((shards) => {
+          const allNodes = rootNode.all({ strategy: "pre" }, (node) => !node.isRoot());
+          
+          const filteredNodes = allNodes.filter((node) => {
+            const nodeShardId = (node.model as ShardIterator).shardId;
+            const found = !!shards.find((s) => (s.model as ShardIterator).shardId === nodeShardId);
+            return found;
+          });
+          
+          return filteredNodes;
+        }),
+        concatAll() // Ensures sequential processing of shards in discovery order
+      )
+      .subscribe((node) => {
+        // Process all shards in parallel - ordering maintained by DynamoDB sequence numbers
+        this.iterators.next(node.model as ShardIterator);
       });
 
-    this.records$ = root.pipe(
-      // NOTE: pre == timeline-ordered traversal
-      map((root) => root.all({ strategy: "pre" }, (node) => !node.isRoot())),
-      filter((shards) => !!shards.length),
-      concatAll(),
-      map((node) => node.model as Shard<T>),
-      distinct((shard) => shard.shardId),
-      tap((shard) =>
-        console.log(
-          chalk.green(`Shard Discovered: ${chalk.bold(shard.toString())}`)
-        )
-      ),
-      concatMap((shard) => shard.records$),
-      shareReplay({
-        refCount: false,
-        scheduler: asyncScheduler,
-      })
-    );
+    // this.records$ = root.pipe(
+    //   // NOTE: pre == timeline-ordered traversal
+    //   map((root) => root.all({ strategy: "pre" }, (node) => !node.isRoot())),
+    //   filter((shards) => !!shards.length),
+    //   concatAll(),
+    //   map((node) => node.model as Shard<T>),
+    //   distinct((shard) => shard.shardId),
+    //   tap((shard) =>
+    //     console.log(
+    //       chalk.green(`Shard Discovered: ${chalk.bold(shard.toString())}`)
+    //     )
+    //   ),
+    //   concatMap((shard) => shard.records$),
+    //   shareReplay({
+    //     refCount: false,
+    //     scheduler: asyncScheduler,
+    //   })
+    // );
 
     signal.addEventListener("abort", () => {
-      // stats.unsubscribe();
-      shards.unsubscribe();
+      iterators.unsubscribe();
+    });
+  }
+
+  override subscribe(
+    observerOrNext?: Partial<Observer<T>> | ((value: T) => void) | null,
+    error?: (err: any) => void,
+    complete?: () => void
+  ): Subscription {
+    // Start feeding the main Subject with data from iterators
+    const subscription = this.iterators
+      .pipe(
+        mergeMap((iterator) => iterator), // Process leaf shards in parallel from TRIM_HORIZON
+        concatMap((payload) => from(payload.modified)), // Extract individual records from payload
+        catchError((err) => {
+          this.error(err);
+          return EMPTY;
+        })
+      )
+      .subscribe({
+        next: (record) => this.next(record as T),
+        error: (err) => this.error(err),
+        complete: () => this.complete()
+      });
+
+    // Subscribe to the main Subject
+    let mainSubscription: Subscription;
+    if (typeof observerOrNext === 'function') {
+      mainSubscription = super.subscribe({
+        next: observerOrNext,
+        error: error || undefined,
+        complete: complete || undefined
+      });
+    } else {
+      mainSubscription = super.subscribe(observerOrNext || undefined);
+    }
+
+    return new Subscription(() => {
+      subscription.unsubscribe();
+      mainSubscription.unsubscribe();
     });
   }
 }
