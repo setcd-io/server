@@ -8,6 +8,7 @@ import { DynamoDbProvider } from ".";
 import {
   catchError,
   defer,
+  delay,
   EMPTY,
   expand,
   from,
@@ -82,7 +83,7 @@ export class ShardIterator extends Subject<Payload> {
     // 2. Start fetching records if this is the first subscriber
     if (!this.started) {
       this.started = true;
-      
+
       // If it's the root node, immediately complete
       if (this.shardId === "root") {
         this.complete();
@@ -120,7 +121,6 @@ export class ShardIterator extends Subject<Payload> {
     return subscription;
   }
 
-
   private fetchAllRecords(): Observable<GetRecordsCommandOutput> {
     return defer(() =>
       from(
@@ -149,7 +149,10 @@ export class ShardIterator extends Subject<Payload> {
           this.done = true;
           return EMPTY;
         }
-        return from(
+
+        // Add backoff when no records are returned to avoid overwhelming DynamoDB
+        const hasRecords = output.Records && output.Records.length > 0;
+        const nextRequest = from(
           this.provider.streamClient.send(
             new GetRecordsCommand({
               ShardIterator: output.NextShardIterator!,
@@ -157,6 +160,9 @@ export class ShardIterator extends Subject<Payload> {
             { abortSignal: this.provider.signal }
           )
         );
+
+        // If no records, add a small delay before next request
+        return hasRecords ? nextRequest : nextRequest.pipe(delay(250));
       })
     );
   }
@@ -167,7 +173,6 @@ export class ShardIterator extends Subject<Payload> {
 
     const records = commandOutput.Records ?? [];
     const payload: Payload = { modified: [], removed: [] };
-
 
     for (const rec of records) {
       if (rec.eventName === "REMOVE") {

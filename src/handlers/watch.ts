@@ -13,6 +13,7 @@ import {
   asyncScheduler,
   combineLatest,
   concatMap,
+  delay,
   filter,
   from,
   groupBy,
@@ -25,6 +26,7 @@ import {
   switchMap,
   takeWhile,
   toArray,
+  concat,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
@@ -285,7 +287,7 @@ export class WatchHandler extends BaseHandler {
                         ) {
                           source.requestUnion.value.startRevision =
                             BigInt(currentRevision);
-}
+                        }
 
                         return {
                           tenant,
@@ -343,21 +345,21 @@ export class WatchHandler extends BaseHandler {
                 res = _.cloneDeep(res);
 
                 if (res.request.requestUnion.case !== "createRequest") {
-                  return of([res]);
+                  return of(res);
                 }
 
                 if (!res.request.requestUnion.value.progressNotify) {
                   // No progress notify, don't set an interval
-                  return of([res]);
+                  return of(res);
                 }
 
-                const progressNotify = interval(1000, asyncScheduler).pipe(
+                const progressNotify = interval(1000).pipe(
                   map(() =>
                     this.watches
                       .get(res.tenant)
                       ?.get(Number(res.response.watchId))
                   ),
-                  takeWhile((watch) => !!watch && watch.progressNotify, true),
+                  takeWhile((watch) => !!watch && watch.progressNotify, false),
                   map(() => {
                     const response = _.cloneDeep(res);
                     response.response.created = false;
@@ -367,10 +369,10 @@ export class WatchHandler extends BaseHandler {
                   })
                 );
 
-                return from([of(res), progressNotify]);
+                // Emit immediate response first, then start interval asynchronously
+                return concat(of(res), progressNotify);
               })
             )
-            .pipe(mergeMap((responses) => from(responses)))
             .subscribe({
               next(response) {
                 subscriber.next(response);
@@ -478,7 +480,7 @@ export class WatchHandler extends BaseHandler {
                         watchId: BigInt(watchId),
                         compactRevision: 0n,
                         events: histories.map((history) => {
-return {
+                          return {
                             $typeName: "mvccpb.Event",
                             type:
                               history.action === "PUT"

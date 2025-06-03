@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(make test:*)",
+      "Bash(aws dynamodb describe-table:*)",
+      "Bash(aws dynamodbstreams:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)"
+    ],
+    "deny": []
+  }
+}

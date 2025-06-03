@@ -219,21 +219,19 @@ export abstract class BaseHandler {
 
       subscriptions.set(response.requestId, {
         ...subscriptions.get(response.requestId),
-        historyToResponse:
-          subscriptions.get(connectionId)?.historyToResponse ||
-          mappers.historyToResponse
-            ? sources.history
-                .pipe(map((his) => his.filter(filters.history)))
-                .pipe(
-                  mappers.historyToResponse!(
-                    tenant,
-                    connectionId,
-                    response.requestId,
-                    abort.signal
-                  )
+        historyToResponse: mappers.historyToResponse
+          ? sources.history
+              .pipe(map((his) => his.filter(filters.history)))
+              .pipe(
+                mappers.historyToResponse!(
+                  tenant,
+                  connectionId,
+                  response.requestId,
+                  abort.signal
                 )
-                .subscribe((res) => responses.next(res))
-            : undefined,
+              )
+              .subscribe((res) => responses.next(res))
+          : undefined,
       });
 
       yield response.response;

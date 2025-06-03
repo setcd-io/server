@@ -15,6 +15,7 @@ import {
 import _ from "lodash";
 import {
   asyncScheduler,
+  concat,
   concatMap,
   from,
   interval,
@@ -195,7 +196,7 @@ export class LeaseHandler extends BaseHandler {
                 })
               );
 
-              const loop = interval(1000, asyncScheduler).pipe(
+              const loop = interval(1000).pipe(
                 switchMap(() => this.kv.kv.getLease(tenant, Number(source.ID))),
                 takeWhile((lease) => !!lease),
                 map((lease) => {
@@ -208,9 +209,8 @@ export class LeaseHandler extends BaseHandler {
                 })
               );
 
-              return from([immediate, loop]);
+              return concat(immediate, loop);
             }),
-            concatMap((responses) => from(responses)),
             map(({ source, keepAlive }) => {
               const response: StreamResponse<
                 LeaseKeepAliveRequest,
