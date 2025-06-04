@@ -481,16 +481,12 @@ describe("PersistentSubject (Strong Consistency)", () => {
         next: (value) => {
           receivedValues.push(value);
           timestamps.push(Date.now() - startTime);
-          console.log(`Received ${value} at ${Date.now() - startTime}ms`);
         }
       });
 
       // Wait long enough for all backfill items to arrive
       const expectedBackfillTime = provider.getBackfillCompleteTime(initialData.length);
       setTimeout(() => {
-        console.log('Final received values:', receivedValues);
-        console.log('Timestamps:', timestamps);
-        
         // Should have received all values
         expect(receivedValues).to.include.members([1, 2, 3, 4, 5]);
         
@@ -525,7 +521,6 @@ describe("PersistentSubject (Strong Consistency)", () => {
       await new Promise(resolve => setTimeout(resolve, provider.getPersistenceCompleteTime()));
       
       const endTime = Date.now();
-      console.log(`Item persistence took ${endTime - startTime}ms`);
       
       expect(receivedValues).to.include("test-item");
       expect(endTime - startTime).to.be.greaterThan(50); // Should take at least put latency
