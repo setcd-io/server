@@ -23,7 +23,7 @@ import {
   REQUEST_TIMEOUT,
   TENANT,
 } from "./util/const";
-import { Shards } from "./cloud-rx/dynamodb/shards";
+import { Shards } from "./cloud-rx/providers/dynamodb/shards";
 import { TenantHistory } from "./storage/kv";
 
 const isStatus = process.argv.slice(-1)[0] === "status";

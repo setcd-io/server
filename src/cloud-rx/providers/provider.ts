@@ -25,7 +25,6 @@ import {
 } from "rxjs";
 import util from "util";
 import { random } from "timeflake";
-import { observe } from "./util";
 import EventEmitter from "events";
 
 export type StoredPartition = {

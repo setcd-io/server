@@ -1,6 +1,7 @@
 import TreeModel from "tree-model";
 import {
   DescribeStreamCommand,
+  Shard as DynamoDBShard,
 } from "@aws-sdk/client-dynamodb-streams";
 import { DynamoDbProvider } from ".";
 import {
@@ -23,10 +24,10 @@ import {
   toArray,
 } from "rxjs";
 import _ from "lodash";
-import { ShardIterator } from "./iterator";
+import { ShardExecutor } from "./iterator";
 
 export class Shards<T> extends Subject<T> {
-  private iterators = new Subject<ShardIterator>();
+  private iterators = new Subject<ShardExecutor>();
 
   constructor(
     private readonly provider: DynamoDbProvider<unknown>,
@@ -35,8 +36,12 @@ export class Shards<T> extends Subject<T> {
   ) {
     super();
 
-    const tree = new TreeModel();
-    const root = new ShardIterator(provider, stream);
+    const tree = new TreeModel({
+      modelComparatorFn: (a: DynamoDBShard, b: DynamoDBShard) => {
+        return a.ShardId === b.ShardId;
+      },
+    });
+    const root: DynamoDBShard = {};
     const rootNode = tree.parse(root);
 
     // this.root = root.withNode(rootNode);
@@ -78,50 +83,50 @@ export class Shards<T> extends Subject<T> {
             provider.streamClient
               .send(new DescribeStreamCommand({ StreamArn: stream }))
               .then((data) => {
-                // console.log("!!! DescribeStream result:", {
-                //   streamArn: stream,
-                //   shardCount: data.StreamDescription?.Shards?.length || 0,
-                //   shards: data.StreamDescription?.Shards?.map(s => ({
-                //     id: s.ShardId,
-                //     parent: s.ParentShardId,
-                //     start: s.SequenceNumberRange?.StartingSequenceNumber,
-                //     end: s.SequenceNumberRange?.EndingSequenceNumber
-                //   })) || []
-                // });
                 return data.StreamDescription?.Shards || [];
               })
           ).pipe(
             reduce((acc, shards) => {
-              const absent = shards.filter(
-                (shard) => {
-                  const exists = !!rootNode.first(
-                    (node) =>
-                      (node.model as ShardIterator).shardId === shard.ShardId
-                  );
-                  return !exists;
-                }
-              );
+              const absent = shards.filter((shard) => {
+                const exists = !!rootNode.first(
+                  (node) =>
+                    (node.model as DynamoDBShard).ShardId === shard.ShardId
+                );
+                return !exists;
+              });
 
-              const newIterators = absent.map(
-                (shard) => {
-                  return new ShardIterator(this.provider, stream, shard);
-                }
-              );
-              acc.push(...newIterators);
+              acc.push(...absent);
               return acc;
-            }, [] as ShardIterator[]),
+            }, [] as DynamoDBShard[]),
             mergeAll(), // or concatAll()?
             map((shard) => {
+              const lineage = rootNode
+                .first(
+                  (node) =>
+                    (node.model as DynamoDBShard).ShardId ===
+                    shard.ParentShardId
+                )
+                ?.getPath();
+
+              if (!lineage) {
+                const added = rootNode.addChild(tree.parse(shard));
+                const executor = new ShardExecutor(
+                  this.provider,
+                  stream,
+                  added.model as DynamoDBShard,
+                  signal
+                );
+              }
               const parent =
                 rootNode.first(
                   (node) =>
-                    (node.model as ShardIterator).shardId ===
-                    shard.parentShardId
+                    (node.model as DynamoDBShard).ShardId ===
+                    shard.ParentShardId
                 ) || rootNode;
 
-              const node = parent.addChild(tree.parse(shard));
+              const leaf = parent.addChild(tree.parse(shard));
 
-              return node;
+              return leaf;
             }),
             toArray()
           )
@@ -129,14 +134,19 @@ export class Shards<T> extends Subject<T> {
       )
       .pipe(
         map((shards) => {
-          const allNodes = rootNode.all({ strategy: "pre" }, (node) => !node.isRoot());
-          
+          const allNodes = rootNode.all(
+            { strategy: "pre" },
+            (node) => !node.isRoot()
+          );
+
           const filteredNodes = allNodes.filter((node) => {
             const nodeShardId = (node.model as ShardIterator).shardId;
-            const found = !!shards.find((s) => (s.model as ShardIterator).shardId === nodeShardId);
+            const found = !!shards.find(
+              (s) => (s.model as ShardIterator).shardId === nodeShardId
+            );
             return found;
           });
-          
+
           return filteredNodes;
         }),
         concatAll() // Ensures sequential processing of shards in discovery order
@@ -188,16 +198,16 @@ export class Shards<T> extends Subject<T> {
       .subscribe({
         next: (record) => this.next(record as T),
         error: (err) => this.error(err),
-        complete: () => this.complete()
+        complete: () => this.complete(),
       });
 
     // Subscribe to the main Subject
     let mainSubscription: Subscription;
-    if (typeof observerOrNext === 'function') {
+    if (typeof observerOrNext === "function") {
       mainSubscription = super.subscribe({
         next: observerOrNext,
         error: error || undefined,
-        complete: complete || undefined
+        complete: complete || undefined,
       });
     } else {
       mainSubscription = super.subscribe(observerOrNext || undefined);

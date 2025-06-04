@@ -17,7 +17,7 @@ import { CONNECTION_ID, TENANT } from "../util/const";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
 import { nanoid } from "nanoid";
-import { iterate } from "../cloud-rx/util";
+import { iterate } from "../cloud-rx/operators/semaphore";
 
 export type StreamRequest<Req> = {
   tenant: string;

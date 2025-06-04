@@ -15,7 +15,7 @@ import {
 import Context from "../context";
 import { serialize } from "./serde";
 import { Item } from "ddb-table/lib/DocumentClient";
-import { DynamoDbProvider } from "../cloud-rx/dynamodb";
+import { DynamoDbProvider } from "../cloud-rx/providers/dynamodb";
 
 export const KEY_SEPARATOR = "$";
 

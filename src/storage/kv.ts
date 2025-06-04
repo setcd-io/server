@@ -29,7 +29,6 @@ import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { PersistentSubject } from "../cloud-rx";
-import { tail } from "../cloud-rx/util";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {

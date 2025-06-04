@@ -8,7 +8,7 @@ import { Logger, P } from "pino";
 import EventEmitter from "events";
 import { BaseSchema, RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
-import { DynamoDbProvider } from "./cloud-rx/dynamodb";
+import { DynamoDbProvider } from "./cloud-rx/providers/dynamodb";
 import { TenantHistory } from "./storage/kv";
 import { deserialize, serialize } from "./storage/serde";
 import { name, version } from "../package.json";

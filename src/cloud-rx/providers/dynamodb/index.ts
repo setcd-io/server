@@ -53,7 +53,6 @@ import { FatalError, RetryError } from "./errors";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import chalk from "chalk";
 import { Shards } from "./shards";
-import { observe, tail } from "../util";
 
 export type DynamoDbOptions<T> = {
   hashKey: string;

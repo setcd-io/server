@@ -1,1 +1,2 @@
-export { PersistentSubject } from "./persistent-subject";
+export * from "./operators";
+export * from "./subjects";
