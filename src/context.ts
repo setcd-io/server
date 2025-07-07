@@ -8,13 +8,15 @@ import { Logger, P } from "pino";
 import EventEmitter from "events";
 import { BaseSchema, RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
-import { DynamoDbProvider } from "./cloud-rx/providers/dynamodb";
 import { TenantHistory } from "./storage/kv";
 import { deserialize, serialize } from "./storage/serde";
 import { name, version } from "../package.json";
 import _ from "lodash";
 import { join } from "path";
 import { readFileSync } from "fs";
+import { DynamoDB } from "cloudrx";
+import { firstValueFrom, Observable } from "rxjs";
+import { DynamoDBImpl } from "cloudrx/dist/providers/aws/provider";
 
 type ContextOpts = {
   logger?: Logger;
@@ -46,9 +48,9 @@ class Context
   private readonly logger?: Logger;
   private readonly _abort: AbortController;
 
-  public readonly kvStorage: DynamoDbProvider<BaseSchema>;
-  public readonly revisionStorage: DynamoDbProvider<BaseSchema>;
-  public readonly historyStorage: DynamoDbProvider<TenantHistory>;
+  private _kvStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  public readonly historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
 
   // TODO: Introduce a PersistentCounter Subject
   private revisions?: RevisionTable;
@@ -58,42 +60,22 @@ class Context
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
 
-    this.kvStorage = new DynamoDbProvider<BaseSchema>({
+    this._kvStorage = DynamoDB.from("kv", {
       signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
-    this.revisionStorage = new DynamoDbProvider<BaseSchema>({
+    this._revisionStorage = DynamoDB.from("rev", {
       signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
-    this.historyStorage = new DynamoDbProvider<TenantHistory>({
+    this.historyStorage = DynamoDB.from("his", {
       signal: this.signal,
-      hashKey: "partition",
-      rangeKey: "timeflake",
-      consistency: "strong",
-      serializers: {
-        partition: (value: TenantHistory) => value.tenant,
-        hash: (value: TenantHistory) =>
-          serialize(value.current.key, "base64", true),
-        serialize: (value: TenantHistory) =>
-          JSON.stringify({
-            ..._.cloneDeep(value),
-            current: serialize(value.current, "base64", true),
-            previous: serialize(value.previous, "base64", false),
-          }),
-        deserialize: (value: string) => {
-          const item = JSON.parse(value);
-          return {
-            ...item,
-            current: deserialize(item.current, true),
-            previous: deserialize(item.previous, false),
-          };
-        },
-      },
+      hashKey: "pk",
+      rangeKey: "sk",
     });
 
     this.on("abort", ({ reason, ctx }) => {
@@ -135,6 +117,14 @@ class Context
     });
   }
 
+  get kvStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
+    return firstValueFrom(this._kvStorage);
+  }
+
+  get revisionStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
+    return firstValueFrom(this._revisionStorage);
+  }
+
   get unmarshalOptions(): unmarshallOptions {
     return {
       convertWithoutMapWrapper: false,
@@ -156,7 +146,7 @@ class Context
 
   async minRevision(tenant: string, minRevision?: number): Promise<number> {
     if (!this.revisions) {
-      this.revisions = new RevisionTable(this.revisionStorage);
+      this.revisions = new RevisionTable(await this.revisionStorage);
     }
 
     const pk = this.revisions._pk(tenant);
@@ -188,7 +178,7 @@ class Context
 
   async currentRevision(tenant: string): Promise<number> {
     if (!this.revisions) {
-      this.revisions = new RevisionTable(this.revisionStorage);
+      this.revisions = new RevisionTable(await this.revisionStorage);
     }
 
     const pk = this.revisions._pk(tenant);
@@ -207,7 +197,7 @@ class Context
 
   async nextRevision(tenant: string): Promise<number> {
     if (!this.revisions) {
-      this.revisions = new RevisionTable(this.revisionStorage);
+      this.revisions = new RevisionTable(await this.revisionStorage);
     }
 
     const pk = this.revisions._pk(tenant);
@@ -227,7 +217,7 @@ class Context
 
   async nextLease(tenant: string): Promise<number> {
     if (!this.revisions) {
-      this.revisions = new RevisionTable(this.revisionStorage);
+      this.revisions = new RevisionTable(await this.revisionStorage);
     }
 
     const pk = this.revisions._pk(tenant);
@@ -247,7 +237,7 @@ class Context
 
   async nextWatch(tenant: string): Promise<number> {
     if (!this.revisions) {
-      this.revisions = new RevisionTable(this.revisionStorage);
+      this.revisions = new RevisionTable(await this.revisionStorage);
     }
 
     const pk = this.revisions._pk(tenant);

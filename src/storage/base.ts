@@ -15,7 +15,8 @@ import {
 import Context from "../context";
 import { serialize } from "./serde";
 import { Item } from "ddb-table/lib/DocumentClient";
-import { DynamoDbProvider } from "../cloud-rx/providers/dynamodb";
+import { DynamoDB } from "cloudrx";
+import { DynamoDBImpl } from "cloudrx/dist/providers/aws/provider";
 
 export const KEY_SEPARATOR = "$";
 
@@ -124,15 +125,15 @@ class BaseTable<
   SkPrefix extends KeyPrefix
 > extends Table<T, "pk", "sk"> {
   constructor(
-    provider: DynamoDbProvider<BaseSchema>,
+    provider: DynamoDBImpl<"pk", "sk">,
     private pkPrefix: PkPrefix,
     private skPrefix: SkPrefix
   ) {
     super({
-      documentClient: provider.documentClient,
+      documentClient: provider.client,
       tableName: provider.tableName,
-      primaryKey: "pk",
-      sortKey: "sk",
+      primaryKey: provider.hashKey,
+      sortKey: provider.rangeKey,
     });
   }
 
@@ -211,7 +212,7 @@ export abstract class TenantTable<
     }
 
     const internal = new BaseTable<T, "tenant", SkPrefix>(
-      this.ctx.kvStorage,
+      await this.ctx.kvStorage,
       "tenant",
       this.skPrefix
     ) as BaseTable<T, "tenant", SkPrefix> & TenantIdentifiable<T>;
@@ -345,7 +346,7 @@ export class RevisionTable extends BaseTable<
   "tenant",
   "revision"
 > {
-  constructor(provider: DynamoDbProvider<BaseSchema>) {
+  constructor(provider: DynamoDBImpl<"pk", "sk">) {
     super(provider, "tenant", "revision");
   }
 }

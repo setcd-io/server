@@ -5,7 +5,7 @@ import { createRouter } from "./routes";
 import { Code, ConnectError, Interceptor } from "@connectrpc/connect";
 import http2 from "http2-wrapper";
 // import { TableMonitor } from "./storage/monitor";
-import { asyncScheduler, interval } from "rxjs";
+import { asyncScheduler, firstValueFrom, interval } from "rxjs";
 import { KVHandler } from "./handlers/kv";
 import { WatchHandler } from "./handlers/watch";
 import { LeaseHandler } from "./handlers/lease";
@@ -23,8 +23,6 @@ import {
   REQUEST_TIMEOUT,
   TENANT,
 } from "./util/const";
-import { Shards } from "./cloud-rx/providers/dynamodb/shards";
-import { TenantHistory } from "./storage/kv";
 
 const isStatus = process.argv.slice(-1)[0] === "status";
 const isVersion = process.argv.includes("--version");
@@ -97,14 +95,14 @@ async function main(ctx: Context) {
   const maintenance = new MaintenanceHandler(ctx);
   const cluster = new ClusterHandler(ctx);
 
-  const kvStorage = await ctx.kvStorage.init("kv");
-  const revisionStorage = await ctx.revisionStorage.init("revision");
-  const historyStorage = await ctx.historyStorage.init("history");
+  const kvStorage = await ctx.kvStorage;
+  const revisionStorage = await ctx.revisionStorage;
+  const historyStorage = await firstValueFrom(ctx.historyStorage);
 
   console.table({
-    "KV Table": kvStorage.repr(),
-    "Revision Table": revisionStorage.repr(),
-    "History Table": historyStorage.repr(),
+    "KV Table": kvStorage.tableArn,
+    "Revision Table": revisionStorage.tableArn,
+    "History Table": historyStorage.tableArn,
   });
 
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });

@@ -13,6 +13,8 @@ import {
   concatAll,
   concatMap,
   filter,
+  firstValueFrom,
+  map,
   Observable,
   observeOn,
   share,
@@ -28,7 +30,7 @@ import _ from "lodash";
 import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
-import { PersistentSubject } from "../cloud-rx";
+import { CloudSubject } from "cloudrx";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -94,16 +96,14 @@ export type TenantHistory = {
 };
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
-  private history: PersistentSubject<TenantHistory>;
+  private history: CloudSubject<TenantHistory>;
   // private _history$: Observable<TenantHistory>;
   private histories: Map<string, Observable<TenantHistory[]>> = new Map();
 
   constructor(ctx: Context) {
     super(ctx, "kv");
 
-    this.history = new PersistentSubject<TenantHistory>(ctx.historyStorage, {
-      signal: ctx.signal,
-    });
+    this.history = new CloudSubject<TenantHistory>(ctx.historyStorage);
 
     // this._history$ = this.history.pipe(observeOn(asyncScheduler), share());
 
@@ -690,15 +690,39 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       key = serialize(key, "utf8", true);
     }
 
-    const all = (await this.history.all()).filter(
-      (h) =>
-        h.tenant === tenant && serialize(h.current.key, "utf8", true) === key
+    // Gather all pages
+    const pages = this.history
+      .snapshot()
+      .pipe(map((h) => h.filter((h) => h.tenant === tenant)));
+
+    // Flatten the pages and filter by key
+    const all = pages.pipe(
+      concatAll(),
+      filter((h) => serialize(h.current.key, "utf8", true) === key),
+      observeOn(asyncScheduler),
+      share()
     );
 
+    // If no revision is specified, return the latest history event
     if (!revision) {
-      return all.slice(-1)[0];
+      return firstValueFrom(
+        all.pipe(
+          filter(
+            (h) => h.current.modRevision === BigInt(h.current.createRevision)
+          ),
+          toArray(),
+          map((histories) => histories.slice(-1)[0])
+        )
+      );
     }
 
-    return all.find((h) => h.current.modRevision === BigInt(revision));
+    // If a revision is specified, return the history event with that revision
+    return firstValueFrom(
+      all.pipe(
+        filter((h) => h.current.modRevision === BigInt(revision)),
+        toArray(),
+        map((histories) => histories[0])
+      )
+    );
   }
 }
