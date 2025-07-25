@@ -3,6 +3,7 @@ CACHEDIR ?= .cache
 SERVE ?= dynamodb-local
 RUN ?= microsoft-etcd3
 WHAT ?= 
+PATCH ?= true
 
 logs:
 	@docker compose \
@@ -39,10 +40,14 @@ patches:
 	git -C $(CACHEDIR)/$(RUN) diff > $(PWD)/test/patches/$(SERVE)+$(RUN).diff
 
 _patch:
+ifeq ($(PATCH),false)
+	@echo "Skipping patch step (PATCH=false)"
+else
 	@cp "$(PWD)/test/patches/$(SERVE)+$(RUN).diff" "$(CACHEDIR)/$(RUN).diff"
 	@cd $(CACHEDIR)/$(RUN) && \
 		git reset --hard && \
 		patch -p1 < ../$(RUN).diff
+endif
 
 _test: _test-$(SERVE)
 	echo "TESTS=\"$(WHAT)\"" > $(CACHEDIR)/$(RUN).env

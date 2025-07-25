@@ -710,9 +710,10 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     if (!revision) {
       return firstValueFrom(
         all.pipe(
-          filter(
-            (h) => h.current.modRevision === BigInt(h.current.createRevision)
-          ),
+          // IDK if i need this
+          // filter(
+          //   (h) => h.current.modRevision === BigInt(h.current.createRevision)
+          // ),
           toArray(),
           map((histories) => histories.slice(-1)[0])
         )
@@ -722,7 +723,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     // If a revision is specified, return the history event with that revision
     return firstValueFrom(
       all.pipe(
-        filter((h) => h.current.modRevision === BigInt(revision)),
+        filter((h) => BigInt(h.current.modRevision) === BigInt(revision)),
         toArray(),
         map((histories) => histories[0])
       )
