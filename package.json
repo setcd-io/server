@@ -48,7 +48,7 @@
     "chai": "^5.2.0",
     "chalk": "^5.4.1",
     "cli-table3": "^0.6.5",
-    "cloudrx": "^0.1.0-beta.20250707095834.e962d87",
+    "cloudrx": "git+https://github.com/scaffoldly/cloudrx.git#fix/contention",
     "ddb-table": "^2.1.2",
     "dotenv": "^16.4.7",
     "dotenv-expand": "^12.0.1",

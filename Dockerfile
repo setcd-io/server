@@ -1,5 +1,7 @@
 ARG BUILDPLATFORM=linux/amd64
 FROM --platform=${BUILDPLATFORM} node:22-alpine AS full
+RUN apk add --no-cache git
+
 WORKDIR /work
 COPY . .
 

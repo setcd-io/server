@@ -162,10 +162,9 @@ export class KVHandler extends BaseHandler {
 
   async deleteRange(
     tenant: string,
-    req: DeleteRangeRequest & { leaseId?: number },
-    revision?: number
+    req: DeleteRangeRequest
   ): Promise<DeleteRangeResponse> {
-    revision = revision || (await this.ctx.nextRevision(tenant));
+    const revision = await this.ctx.currentRevision(tenant);
 
     const deleted = await this.kv.range(
       tenant,
@@ -175,10 +174,9 @@ export class KVHandler extends BaseHandler {
         maxModRevision: BigInt(revision),
       },
       {
-        leaseId: req.leaseId,
         handler: (kv) =>
           this.kv
-            .deleteKey(tenant, deserialize(kv.key, true), revision)
+            .deleteKey(tenant, deserialize(kv.key, true), kv.modRevision)
             .then(() => kv),
       }
     );

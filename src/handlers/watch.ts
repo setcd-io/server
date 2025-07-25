@@ -27,6 +27,7 @@ import {
   takeWhile,
   toArray,
   concat,
+  tap,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
@@ -34,6 +35,7 @@ import Table from "cli-table3";
 import util from "util";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
+import { stringify } from "../util/log";
 
 type Watch = WatchCreateRequest & {
   tenant: string;
@@ -437,13 +439,9 @@ export class WatchHandler extends BaseHandler {
                           watchId: group$.key,
                           watch,
                           histories: histories.filter((history) => {
-                            if (
-                              history.previous &&
-                              history.previous.modRevision <
-                                watch?.startRevision!
-                            ) {
-                              return false;
-                            }
+                            // if (!watch?.prevKv) {
+                            //   delete history.previous;
+                            // }
 
                             return (
                               history.current.modRevision >=

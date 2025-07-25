@@ -10,15 +10,20 @@ import { deserialize, serialize } from "./serde";
 import {
   asyncScheduler,
   bufferTime,
+  combineLatest,
   concatAll,
   concatMap,
   filter,
   firstValueFrom,
+  from,
   map,
   Observable,
   observeOn,
+  queueScheduler,
   share,
   shareReplay,
+  Subscription,
+  switchMap,
   takeUntil,
   tap,
   timer,
@@ -30,7 +35,8 @@ import _ from "lodash";
 import { ErrGRPCEmptyKey } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
-import { CloudSubject } from "cloudrx";
+import { CloudReplaySubject } from "cloudrx";
+import { log } from "../util/log";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -82,34 +88,36 @@ const lastChar = (str: string | undefined): number | undefined => {
   return str.charCodeAt(str.length - 1);
 };
 
-const HISTORY_SIZE = 1000;
-const HISTORY_BATCH_SIZE = HISTORY_SIZE / 100;
-const HISTORY_TIMEOUT = HISTORY_SIZE / 10;
-const WITH_TIMEOUT = <T>() => takeUntil<T>(timer(HISTORY_TIMEOUT));
+const HISTORY_TIMEOUT = 1000;
+const HISTORY_SIZE = HISTORY_TIMEOUT / 10;
 
 export type TenantHistory = {
   tenant: string;
   action: "PUT" | "DELETE";
   current: KeyValue;
   previous?: KeyValue;
-  expires?: number;
 };
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
-  private history: CloudSubject<TenantHistory>;
-  // private _history$: Observable<TenantHistory>;
-  private histories: Map<string, Observable<TenantHistory[]>> = new Map();
+  private history: CloudReplaySubject<TenantHistory>;
 
   constructor(ctx: Context) {
     super(ctx, "kv");
 
-    this.history = new CloudSubject<TenantHistory>(ctx.historyStorage);
-
-    // this._history$ = this.history.pipe(observeOn(asyncScheduler), share());
-
-    // const expiration = this.history.expired
-    //   .pipe(switchMap((h) => this.deleteKey(h.tenant, h.current.key)))
-    //   .subscribe();
+    this.history = new CloudReplaySubject<TenantHistory>(ctx.historyStorage);
+    this.history.on("expired", (h) => {
+      log(h.current, {
+        level: "info",
+        tenant: h.tenant,
+        action: "Expired",
+        context: {
+          action: h.action,
+        },
+      });
+      queueMicrotask(() =>
+        this.deleteKey(h.tenant, h.current.key, Number(h.current.modRevision))
+      );
+    });
 
     ctx.on("abort", () => {
       // expiration.unsubscribe();
@@ -117,28 +125,26 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   }
 
   public history$(tenant: string): Observable<TenantHistory[]> {
-    return this.history.pipe(
-      filter((h) => h.tenant === tenant),
-      bufferTime(100, undefined, 10),
-      share(),
-      observeOn(asyncScheduler)
-      // filter((histories) => !!histories.length)
+    return from(this.ctx.minRevision(tenant)).pipe(
+      switchMap((minRevision) =>
+        this.history.pipe(
+          // tap((h) => {
+          //   console.log("!!! incoming history", {
+          //     tenant,
+          //     minRevision,
+          //     action: h.action,
+          //     current: stringify(h.current).message,
+          //     previous: h.previous ? stringify(h.previous).message : undefined,
+          //   });
+          // }),
+          filter(
+            (h) => h.tenant === tenant && h.current.modRevision >= minRevision
+          )
+        )
+      ),
+      bufferTime(HISTORY_TIMEOUT, undefined, HISTORY_SIZE),
+      share()
     );
-    // if (this.histories.has(tenant)) {
-    //   return this.histories.get(tenant)!;
-    // }
-
-    // this.histories.set(
-    //   tenant,
-    //   this.history.pipe(
-    //     filter((h) => h.tenant === tenant),
-    //     bufferTime(HISTORY_TIMEOUT, HISTORY_TIMEOUT * 2, HISTORY_BATCH_SIZE),
-    //     filter((histories) => !!histories.length),
-    //     shareReplay({ refCount: false, scheduler: asyncScheduler })
-    //   )
-    // );
-
-    // return this.histories.get(tenant)!;
   }
 
   async putKey(
@@ -182,19 +188,14 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
         .update(current.pk, current.sk)
         .set("value", current.value)
         .set("modRevision", current.modRevision)
-        .add("version", 1)
+        .add("version", current.version)
         .condition((c) =>
           c
             .attributeExists("key")
             .and((c) => c.eq("tenant", current.tenant))
             .and((c) => c.eq("lease", current.lease))
             .and((c) => c.eq("key", current.key))
-            .and((c) => c.gt("version", 0))
-            .and((c) =>
-              c
-                .attributeNotExists("expires")
-                .or((c) => c.gte("expires", Math.floor(Date.now() / 1000)))
-            )
+            .and((c) => c.gte("version", current.version))
         );
 
       if (current.expires) {
@@ -209,14 +210,15 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
         current.createRevision = previous.createRevision;
         current.version = previous.version + 1;
         current.expires = previous.expires;
-        const historyEvent = {
-          tenant,
-          action: "PUT" as const,
-          current: intoKv(current),
-          previous: intoKv(previous),
-          expires: current.expires,
-        };
-        this.history.next(historyEvent);
+        this.history.next(
+          {
+            tenant,
+            action: "PUT",
+            current: intoKv(current),
+            previous: intoKv(previous),
+          },
+          current.expires
+        );
         return { current, previous };
       }
     } catch (e) {
@@ -247,13 +249,14 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
 
       current = Attributes;
 
-      const historyEvent = {
-        tenant,
-        action: "PUT" as const,
-        current: intoKv(current),
-        expires: current.expires,
-      };
-      this.history.next(historyEvent);
+      this.history.next(
+        {
+          tenant,
+          action: "PUT" as const,
+          current: intoKv(current),
+        },
+        current.expires
+      );
 
       return {
         current,
@@ -266,53 +269,44 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   async deleteKey(
     tenant: string,
     key: Uint8Array,
-    revision?: number
-  ): Promise<KVSchema | undefined> {
-    if (!revision) {
-      revision = await this.ctx.nextRevision(tenant);
-    }
-
-    const table = await this.table(tenant);
-
-    const item = await this.expire(tenant, table.pk(), table.sk(key), revision);
-
-    return item;
-  }
-
-  private async expire(
-    tenant: string,
-    pk: string,
-    sk: string,
     revision: number
   ): Promise<KVSchema | undefined> {
     const table = await this.table(tenant);
 
     const value = serialize(new Uint8Array(0), "base64", true);
+    const modRevision = await this.ctx.nextRevision(tenant);
     const version = 0;
+    const lease = 0;
     const expires = Math.floor(Date.now() / 1000);
 
     const query = table
-      .update(pk, sk)
-      .set("value", value)
-      .set("modRevision", revision)
+      .update(table.pk(), table.sk(key))
+      .set("value", serialize(new Uint8Array(0), "base64", true))
+      .set("modRevision", modRevision)
       .set("version", version)
-      .set("expires", expires);
+      .set("lease", lease)
+      .set("expires", expires)
+      .condition((c) => c.lte("modRevision", revision));
 
     try {
-      let { Attributes: previous } = await query
-        .condition((c) => c.lte("modRevision", revision))
-        .exec({ ReturnValues: "ALL_OLD" });
+      const { Attributes: previous } = await query.exec({
+        ReturnValues: "ALL_OLD",
+      });
 
       if (!previous) {
-        console.warn(chalk.red("Key not found for expiration"), { pk, sk });
+        console.debug(chalk.yellow("Key already deleted"), {
+          pk: table.pk(),
+          sk: table.sk(key),
+        });
         return undefined;
       }
 
       const current: KVSchema = {
         ...previous,
         value,
-        modRevision: revision,
+        modRevision,
         version,
+        lease,
         expires,
       };
 
@@ -322,12 +316,17 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
         current: intoKv(current),
         previous: intoKv(previous),
       });
+
       return current;
     } catch (e) {
-      console.warn("Unable to expire key", { pk, sk, message: e.message });
       if (e instanceof Error && e.name === "ConditionalCheckFailedException") {
         return undefined;
       }
+      console.warn("Unable to delete key", {
+        pk: table.pk(),
+        sk: table.sk(key),
+        message: e.message,
+      });
       throw e;
     }
   }
@@ -539,14 +538,14 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
   }
 
   async deleteLease(tenant: string, leaseId: number): Promise<RelativeLease> {
-    const revision = await this.ctx.nextRevision(tenant);
-    const key = `__lease:${leaseId}`;
+    const revision = await this.ctx.currentRevision(tenant);
+    const key = deserialize<Uint8Array>(`__lease:${leaseId}`, true);
 
     await this.range(
       tenant,
       {
         $typeName: "etcdserverpb.RangeRequest",
-        key: new Uint8Array(Buffer.from(key)),
+        key,
         rangeEnd: new Uint8Array(0),
         limit: 1n,
         maxModRevision: BigInt(revision),
@@ -554,12 +553,16 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       {
         leaseId: _INTERNAL.LEASE_ID,
         handler: (lease) =>
-          this.expire(lease.tenant, lease.pk, lease.sk, lease.modRevision),
+          this.deleteKey(
+            lease.tenant,
+            deserialize(lease.key, true),
+            Number(lease.modRevision)
+          ),
       }
     );
 
     return {
-      key,
+      key: serialize(key, "utf8", true),
       tenant,
       revision,
       leaseId: Number(leaseId),

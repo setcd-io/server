@@ -18,6 +18,7 @@ import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
 import { nanoid } from "nanoid";
 import { iterate } from "../util/async";
+import { log } from "../util/log";
 
 export type StreamRequest<Req> = {
   tenant: string;
@@ -141,7 +142,7 @@ export abstract class BaseHandler {
           break;
         }
 
-        const requestId = nanoid();
+        const requestId = nanoid(8);
 
         subscriptions.set(requestId, {
           requestToResponse: of(request)
@@ -160,15 +161,26 @@ export abstract class BaseHandler {
                   take(1),
                   map(() => {
                     if (abort.signal.reason.name === "AbortError") {
-                      console.log(
-                        chalk.yellow(`[con:${connectionId}] Connection Closed`)
-                      );
+                      log("Connection Closed", {
+                        level: "warn",
+                        tenant,
+                        action: "Bidi",
+                        context: {
+                          con: connectionId,
+                          req: requestId,
+                        },
+                      });
                     } else {
-                      console.warn(
-                        chalk.red(
-                          `[con:${connectionId}] Connection Aborted: ${abort.signal.reason.message}`
-                        )
-                      );
+                      log("Connection Aborted", {
+                        level: "error",
+                        tenant,
+                        action: "Bidi",
+                        output: abort.signal.reason.meassage,
+                        context: {
+                          con: connectionId,
+                          req: requestId,
+                        },
+                      });
                     }
 
                     return abort.signal.reason;

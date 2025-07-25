@@ -9,7 +9,7 @@ import {
 import chalk from "chalk";
 import { CONNECTION_ID, DEFAULT_TENANT, TENANT } from "./const";
 
-const stringify = (
+export const stringify = (
   message: Message<string> | ConnectError
 ): { revision?: number; message?: string } => {
   if (message instanceof ConnectError) {
@@ -102,7 +102,87 @@ function peek(
   }
 }
 
-export const log = async (
+type Level = "info" | "error" | "warn" | "success";
+type Context = Record<string, string | number>;
+type Options = {
+  level: Level;
+  tenant: string;
+  action: string;
+  output?: string | Message<string> | ConnectError;
+  context?: Context;
+};
+
+export const log = (
+  message?: string | Message<string>,
+  {
+    level = "info",
+    tenant = DEFAULT_TENANT,
+    action,
+    output,
+    context,
+  }: {
+    level: Level;
+    tenant: string;
+    action?: string;
+    message?: string | Message<string>;
+    output?: string | Message<string> | ConnectError;
+    context?: Context;
+  } = { level: "info", tenant: DEFAULT_TENANT }
+): void => {
+  const severityColor =
+    level === "error"
+      ? chalk.red
+      : level === "warn"
+      ? chalk.yellow
+      : level === "info"
+      ? chalk.blue
+      : chalk.green;
+
+  const symbol =
+    level === "error"
+      ? severityColor("✘")
+      : level === "warn"
+      ? severityColor("▲")
+      : level === "info"
+      ? severityColor("ℹ︎")
+      : severityColor("✔︎");
+
+  tenant =
+    tenant === DEFAULT_TENANT ? chalk.yellow(tenant) : chalk.cyan(tenant);
+
+  action = chalk.green(action);
+
+  if (message && typeof message !== "string") {
+    message = stringify(message).message;
+  }
+
+  if (output && typeof output !== "string") {
+    const { message, revision } = stringify(output);
+    output = message;
+    if (revision) {
+      context = {
+        ...context,
+        rev: revision,
+      };
+    }
+  }
+
+  let io = chalk.yellow(message ? message : chalk.dim("[empty]"));
+  if (output) {
+    io = `${io} ${chalk.dim("==>")} ${severityColor(output)}`;
+  }
+
+  context = Object.entries(context || {}).reduce((acc, [key, value]) => {
+    acc[key] = chalk.dim(`[${key}:${chalk.blue(value)}] `);
+    return acc;
+  }, {} as Record<string, string>);
+
+  console.log(
+    `${symbol} [${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
+  );
+};
+
+export const logRequest = async (
   req: UnaryRequest | StreamRequest,
   next: (
     req: UnaryRequest | StreamRequest
@@ -110,10 +190,6 @@ export const log = async (
 ): Promise<UnaryResponse | StreamResponse> => {
   const id = req.contextValues?.get(CONNECTION_ID);
   const tenant = req.contextValues?.get(TENANT);
-
-  const _num = (name: string, value: number | bigint | string): string => {
-    return chalk.dim(`[${name}:${chalk.blue(value)}]`);
-  };
 
   const _log = (
     incoming?: Message<string>,
@@ -123,40 +199,26 @@ export const log = async (
       return;
     }
 
-    const { message: request } = stringify(incoming);
-    const { message: response, revision } = stringify(outgoing);
+    const context: Context = {
+      con: id,
+    };
 
-    let emoji = chalk.green(`✔︎`);
-
-    let prefix = tenant;
-    if (tenant === DEFAULT_TENANT) {
-      emoji = chalk.yellow(`▲`);
-      prefix = `${chalk.yellow(prefix)}`;
-    } else {
-      prefix = `${chalk.cyan(prefix)}`;
-    }
-
-    prefix = `[${prefix}] ${_num("con", id)} ${chalk.green(
-      req.method.name
-    )}: ${chalk.yellow(request)}`;
-
-    let suffix = "";
-    if (response) {
-      if (outgoing instanceof ConnectError) {
-        suffix = chalk.red(response);
-        emoji = chalk.red(`✘`);
-      } else {
-        suffix = chalk.green(response);
-      }
-    } else {
-      suffix = chalk.dim(chalk.green("(empty)"));
-    }
+    const { message: input } = stringify(incoming);
+    const { message: output, revision } = stringify(outgoing);
 
     if (revision) {
-      suffix = `${suffix} ${_num("rev", revision)}`;
+      context["rev"] = revision;
     }
 
-    console.log(`${emoji} ${prefix} ${chalk.dim(`==>`)} ${suffix}`);
+    let level: Level = outgoing instanceof ConnectError ? "error" : "success";
+
+    log(input, {
+      level,
+      tenant,
+      action: req.method.name,
+      output,
+      context,
+    });
   };
 
   return next(req)

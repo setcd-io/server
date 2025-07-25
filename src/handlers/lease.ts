@@ -24,6 +24,7 @@ import {
   OperatorFunction,
   switchMap,
   takeWhile,
+  tap,
 } from "rxjs";
 import { KVHandler } from "./kv";
 import { deserialize } from "../storage/serde";

@@ -61,19 +61,16 @@ class Context
     this.logger = opts?.logger || undefined;
 
     this._kvStorage = DynamoDB.from("kv", {
-      signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._revisionStorage = DynamoDB.from("rev", {
-      signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this.historyStorage = DynamoDB.from("his", {
-      signal: this.signal,
       hashKey: "pk",
       rangeKey: "sk",
     });

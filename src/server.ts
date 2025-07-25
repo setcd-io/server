@@ -14,7 +14,7 @@ import { ClusterHandler } from "./handlers/cluster";
 import { AuthHandler } from "./handlers/auth";
 import { nanoid } from "nanoid";
 import _ from "lodash";
-import { log } from "./util/log";
+import { logRequest } from "./util/log";
 import {
   CONNECTION_ID,
   CONNECTION_TIMEOUT,
@@ -40,7 +40,7 @@ const intercept: Interceptor = (next) => async (req) => {
     req.contextValues?.set(TENANT, name);
   }
 
-  return log(req, next).catch((err) => {
+  return logRequest(req, next).catch((err) => {
     if (err instanceof ConnectError) {
       throw err;
     }
