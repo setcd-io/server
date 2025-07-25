@@ -154,7 +154,22 @@ export abstract class BaseHandler {
                 abort.signal
               )
             )
-            .subscribe((res) => responses.next(res)),
+            .subscribe((res) => {
+              responses.next(res);
+            }),
+          historyToResponse: sources.history
+            .pipe(map((his) => his.filter(filters.history)))
+            .pipe(
+              mappers.historyToResponse!(
+                tenant,
+                connectionId,
+                requestId,
+                abort.signal
+              )
+            )
+            .subscribe((res) => {
+              responses.next(res);
+            }),
           errorToRequest: mappers.errorToRequest
             ? fromEvent(abort.signal, "abort")
                 .pipe(
@@ -198,7 +213,9 @@ export abstract class BaseHandler {
                     abort.signal
                   )
                 )
-                .subscribe((res) => responses.next(res))
+                .subscribe((res) => {
+                  responses.next(res);
+                })
             : undefined,
         });
       }
@@ -228,23 +245,6 @@ export abstract class BaseHandler {
       if (callbacks?.onResponse) {
         await callbacks.onResponse(tenant, connectionId, response);
       }
-
-      subscriptions.set(response.requestId, {
-        ...subscriptions.get(response.requestId),
-        historyToResponse: mappers.historyToResponse
-          ? sources.history
-              .pipe(map((his) => his.filter(filters.history)))
-              .pipe(
-                mappers.historyToResponse!(
-                  tenant,
-                  connectionId,
-                  response.requestId,
-                  abort.signal
-                )
-              )
-              .subscribe((res) => responses.next(res))
-          : undefined,
-      });
 
       yield response.response;
     }

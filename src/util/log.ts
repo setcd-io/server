@@ -103,7 +103,7 @@ function peek(
 }
 
 type Level = "info" | "error" | "warn" | "success";
-type Context = Record<string, string | number>;
+type Context = Record<string, string | number | bigint | boolean | undefined>;
 type Options = {
   level: Level;
   tenant: string;

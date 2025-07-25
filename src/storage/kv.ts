@@ -128,20 +128,22 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     return from(this.ctx.minRevision(tenant)).pipe(
       switchMap((minRevision) =>
         this.history.pipe(
-          // tap((h) => {
-          //   console.log("!!! incoming history", {
-          //     tenant,
-          //     minRevision,
-          //     action: h.action,
-          //     current: stringify(h.current).message,
-          //     previous: h.previous ? stringify(h.previous).message : undefined,
-          //   });
-          // }),
           filter(
             (h) => h.tenant === tenant && h.current.modRevision >= minRevision
           )
         )
       ),
+      tap((h) => {
+        log(h.previous, {
+          level: "info",
+          action: "History",
+          tenant: h.tenant,
+          output: h.current,
+          context: {
+            action: h.action,
+          },
+        });
+      }),
       bufferTime(HISTORY_TIMEOUT, undefined, HISTORY_SIZE),
       share()
     );
