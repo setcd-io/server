@@ -14,21 +14,20 @@ import {
 } from "@setcd-io/connectrpc-etcd";
 import _ from "lodash";
 import {
-  asyncScheduler,
   concat,
-  concatMap,
+  filter,
   from,
   interval,
   map,
+  mergeAll,
   Observable,
   OperatorFunction,
   switchMap,
   takeWhile,
-  tap,
 } from "rxjs";
 import { KVHandler } from "./kv";
 import { deserialize } from "../storage/serde";
-import { _INTERNAL, NotFoundError, RelativeLease } from "../storage/kv";
+import { _INTERNAL, NotFoundError, TenantHistory } from "../storage/kv";
 import { ConnectError, HandlerContext } from "@connectrpc/connect";
 import { nanoid } from "nanoid";
 
@@ -149,6 +148,14 @@ export class LeaseHandler extends BaseHandler {
             signal
           );
         },
+        historyToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapHistoryToResponse(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
+        },
       },
       {
         onResponse: async (tenant, connectionId, res) => {
@@ -230,6 +237,71 @@ export class LeaseHandler extends BaseHandler {
           .subscribe({
             next(response) {
               subscriber.next(response);
+            },
+            error(err) {
+              subscriber.error(err);
+            },
+            complete() {
+              subscriber.complete();
+            },
+          });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      });
+    };
+  }
+
+  mapHistoryToResponse(
+    tenant: string,
+    connectionId: string,
+    requestId: string,
+    signal: AbortSignal
+  ): OperatorFunction<
+    TenantHistory[],
+    StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+  > {
+    return (
+      source: Observable<TenantHistory[]>
+    ): Observable<
+      StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+    > => {
+      return new Observable<
+        StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+      >((subscriber) => {
+        const subscription = source
+          .pipe(
+            mergeAll(),
+            // only handling DELETE actions for now
+            //  - TODO: decide if we want to handle PUT actions
+            filter((h) => h.tenant === tenant && h.action === "DELETE"),
+            map((history) => {
+              const response: StreamResponse<
+                LeaseKeepAliveRequest,
+                LeaseKeepAliveResponse
+              > = {
+                tenant: tenant,
+                connectionId,
+                requestId,
+                request: {
+                  $typeName: "etcdserverpb.LeaseKeepAliveRequest",
+                  ID: BigInt(history.current.lease),
+                },
+                response: {
+                  $typeName: "etcdserverpb.LeaseKeepAliveResponse",
+                  ID: BigInt(history.current.lease),
+                  TTL: BigInt(0),
+                },
+                signal,
+              };
+              return response;
+            })
+          )
+          .subscribe({
+            next(response) {
+              // TODO: temp disabled
+              // subscriber.next(response);
             },
             error(err) {
               subscriber.error(err);

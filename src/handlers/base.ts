@@ -249,6 +249,13 @@ export abstract class BaseHandler {
       yield response.response;
     }
 
-    console.log(chalk.yellow(`[con:${connectionId}] Connection Finished`));
+    log("Connection Finished", {
+      level: "info",
+      tenant,
+      action: "Bidi",
+      context: {
+        con: connectionId,
+      },
+    });
   }
 }
