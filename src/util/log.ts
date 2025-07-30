@@ -103,11 +103,12 @@ function peek(
 }
 
 type Level = "info" | "error" | "warn" | "success";
-type Context = Record<string, string | number | bigint | boolean | undefined>;
+type ContextValue = string | number | bigint | boolean;
+type Context = Record<string, ContextValue | ContextValue[] | undefined>;
 type Options = {
   level: Level;
   tenant: string;
-  action: string;
+  action?: string;
   output?: string | Message<string> | ConnectError;
   context?: Context;
 };
@@ -120,14 +121,7 @@ export const log = (
     action,
     output,
     context,
-  }: {
-    level: Level;
-    tenant: string;
-    action?: string;
-    message?: string | Message<string>;
-    output?: string | Message<string> | ConnectError;
-    context?: Context;
-  } = { level: "info", tenant: DEFAULT_TENANT }
+  }: Options = { level: "info", tenant: DEFAULT_TENANT }
 ): void => {
   const severityColor =
     level === "error"

@@ -35,7 +35,7 @@ import Table from "cli-table3";
 import util from "util";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
-import { stringify } from "../util/log";
+import { log, stringify } from "../util/log";
 
 type Watch = WatchCreateRequest & {
   tenant: string;
@@ -190,8 +190,8 @@ export class WatchHandler extends BaseHandler {
             signal
           );
         },
-        errorToRequest: (tenant, connectionId, requestId, signal) => {
-          return this.mapErrorToRequest(
+        errorToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapErrorToResponse(
             tenant,
             connectionId,
             requestId,
@@ -200,7 +200,7 @@ export class WatchHandler extends BaseHandler {
         },
       },
       {
-        onResponse: async (tenant, connectionId, res) => {
+        mutateResponse: async (tenant, connectionId, res) => {
           res.response.header = await this.header(tenant);
 
           if (
@@ -263,7 +263,7 @@ export class WatchHandler extends BaseHandler {
         (subscriber) => {
           const subscription = source
             .pipe(
-              switchMap((source) => {
+              concatMap((source) => {
                 this.watches.set(tenant, this.watches.get(tenant) || new Map());
                 switch (source.requestUnion.case) {
                   case "createRequest":
@@ -423,6 +423,19 @@ export class WatchHandler extends BaseHandler {
                       )
                       .map((watch) => ({ watch, history }));
 
+                    log(history.current, {
+                      level: "info",
+                      tenant,
+                      action: "Watcher",
+                      output: `${watchers.map(
+                        (w) => stringify(w.watch).message
+                      )}`,
+                      context: {
+                        con: connectionId,
+                        req: requestId,
+                      },
+                    });
+
                     return from(watchers);
                   }),
                   groupBy((x) => x.watch.watchId),
@@ -520,62 +533,74 @@ export class WatchHandler extends BaseHandler {
     };
   }
 
-  mapErrorToRequest(
+  mapErrorToResponse(
     tenant: string,
     connectionId: string,
     requestId: string,
     signal: AbortSignal
-  ): OperatorFunction<Error, WatchRequest> {
-    return (source: Observable<Error>): Observable<WatchRequest> => {
-      return new Observable<WatchRequest>((subscriber) => {
-        const subscription = source
-          .pipe(
-            concatMap((source) => {
-              return from(
-                Array.from(this.watches.get(tenant)?.values() || []).map(
-                  (watch) => {
-                    return {
-                      ..._.cloneDeep(watch),
-                      cancelReason: source.message,
-                    };
-                  }
-                )
-              );
-            }),
-            filter(
-              (watch) =>
-                watch.tenant === tenant && watch.connectionId === connectionId
-            ),
-            map((watch) => {
-              const request: WatchRequest = {
-                $typeName: "etcdserverpb.WatchRequest",
-                requestUnion: {
-                  case: "cancelRequest",
-                  value: {
-                    $typeName: "etcdserverpb.WatchCancelRequest",
-                    watchId: watch.watchId,
+  ): OperatorFunction<Error, StreamResponse<WatchRequest, WatchResponse>> {
+    return (
+      source: Observable<Error>
+    ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
+      return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
+        (subscriber) => {
+          const subscription = source
+            .pipe(
+              concatMap((source) => {
+                console.log(
+                  "!!! mapping error to request !!!",
+                  source,
+                  tenant,
+                  connectionId,
+                  requestId
+                );
+                return from(
+                  Array.from(this.watches.get(tenant)?.values() || []).map(
+                    (watch) => {
+                      return {
+                        ..._.cloneDeep(watch),
+                        cancelReason: source.message,
+                      };
+                    }
+                  )
+                );
+              }),
+              filter(
+                (watch) =>
+                  watch.tenant === tenant && watch.connectionId === connectionId
+              ),
+              map((watch) => {
+                const request: WatchRequest = {
+                  $typeName: "etcdserverpb.WatchRequest",
+                  requestUnion: {
+                    case: "cancelRequest",
+                    value: {
+                      $typeName: "etcdserverpb.WatchCancelRequest",
+                      watchId: watch.watchId,
+                    },
                   },
-                },
-              };
-              return request;
-            })
-          )
-          .subscribe({
-            next(request) {
-              subscriber.next(request);
-            },
-            error(err) {
-              subscriber.error(err);
-            },
-            complete() {
-              subscriber.complete();
-            },
-          });
+                };
+                return request;
+              }),
+              this.mapRequestToResponse(tenant, connectionId, requestId, signal)
+            )
+            .subscribe({
+              next(response) {
+                subscriber.next(response);
+              },
+              error(err) {
+                subscriber.error(err);
+              },
+              complete() {
+                subscriber.complete();
+              },
+            });
 
-        return () => {
-          subscription.unsubscribe();
-        };
-      });
+          return () => {
+            subscription.unsubscribe();
+          };
+        }
+      );
     };
   }
 }

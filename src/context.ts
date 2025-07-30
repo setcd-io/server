@@ -50,6 +50,7 @@ class Context
 
   private _kvStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  public readonly leaseStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   public readonly historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
 
   // TODO: Introduce a PersistentCounter Subject
@@ -66,6 +67,11 @@ class Context
     });
 
     this._revisionStorage = DynamoDB.from("rev", {
+      hashKey: "pk",
+      rangeKey: "sk",
+    });
+
+    this.leaseStorage = DynamoDB.from("lease", {
       hashKey: "pk",
       rangeKey: "sk",
     });

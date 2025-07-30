@@ -1,15 +1,30 @@
 import Context from "../context";
 import { ResponseHeader } from "@setcd-io/connectrpc-etcd";
 import {
+  asapScheduler,
+  asyncScheduler,
+  catchError,
+  defer,
+  EMPTY,
   filter,
+  from,
   fromEvent,
+  ignoreElements,
   map,
+  MonoTypeOperatorFunction,
+  NEVER,
   Observable,
+  observeOn,
   of,
   OperatorFunction,
+  repeat,
+  share,
   Subject,
   Subscription,
+  switchMap,
   take,
+  takeUntil,
+  tap,
 } from "rxjs";
 import { ConnectError, HandlerContext } from "@connectrpc/connect";
 import chalk from "chalk";
@@ -35,6 +50,10 @@ export type StreamResponse<Req, Res> = {
   request: Req;
   response: Res;
   signal: AbortSignal;
+};
+
+const ignoreErrors = <T>(): OperatorFunction<T, T> => {
+  return (source: Observable<T>) => source.pipe(catchError(() => EMPTY));
 };
 
 export abstract class BaseHandler {
@@ -83,70 +102,121 @@ export abstract class BaseHandler {
         requestId: string,
         signal: AbortSignal
       ) => OperatorFunction<Req, StreamResponse<Req, Res>>;
-      historyToResponse?: (
+      historyToResponse: (
         tenant: string,
         connectionId: string,
         requestId: string,
         signal: AbortSignal
       ) => OperatorFunction<TenantHistory[], StreamResponse<Req, Res>>;
-      errorToRequest?: (
+      errorToResponse: (
         tenant: string,
         connectionId: string,
         requestId: string,
         signal: AbortSignal
-      ) => OperatorFunction<Error, Req>;
+      ) => OperatorFunction<Error, StreamResponse<Req, Res>>;
     },
-    callbacks?: {
-      onResponse?: (
+    interceptors?: {
+      mutateResponse?: (
         tenant: string,
         connectionId: string,
         res: StreamResponse<Req, Res>
+      ) => Promise<void>;
+      beforeComplete?: (
+        tenant: string,
+        connectionId: string,
+        reqs: Req[],
+        nextFn: (value: StreamResponse<Req, Res>) => void
       ) => Promise<void>;
     }
   ): AsyncGenerator<Res, void, unknown> {
     const abort = new AbortController();
     const tenant = this.getTenant(ctx);
     const connectionId = this.getConnectionId(ctx);
-    const responses = new Subject<StreamResponse<Req, Res>>();
 
-    const subscriptions: Map<
-      string,
-      {
-        completion?: Subscription;
-        requestToResponse?: Subscription;
-        historyToResponse?: Subscription;
-        errorToRequest?: Subscription;
-      }
-    > = new Map();
+    const requests: Req[] = [];
+    const controller = new Subject<StreamResponse<Req, Res>>();
+    const subscriptions: Subscription[] = [];
 
-    subscriptions.set(connectionId, {
-      completion: responses.subscribe({
+    // DEVNOTE: The only way to shutdown a stream is to call controller.error()
+    // - This is so beforeComplete is guaranteed to be called
+    const teardown = controller
+      .pipe(
+        // ignoreElements(),
+        catchError(() =>
+          defer(() =>
+            (
+              interceptors?.beforeComplete?.(
+                tenant,
+                connectionId,
+                requests,
+                (res) => controller.next(res)
+              ) ?? Promise.resolve()
+            ).then(() =>
+              // subscriptions.push(
+              //   asyncScheduler.schedule(
+              //     () => ,
+              //     1000 // Give some time for next calls to complete
+              //   )
+              // )
+              controller.complete()
+            )
+          )
+        )
+      )
+      .subscribe({
         complete: () => {
-          subscriptions.forEach((sub) => {
-            sub.completion?.unsubscribe();
-            sub.requestToResponse?.unsubscribe();
-            sub.historyToResponse?.unsubscribe();
-            sub.errorToRequest?.unsubscribe();
+          log("Stream completed", {
+            level: "info",
+            tenant,
+            action: "Bidi",
+            context: { con: connectionId, reqs: requests.length },
           });
         },
-      }),
-    });
+      });
+
+    // subscriptions.push(teardown);
 
     ctx.signal.addEventListener("abort", () => {
-      abort.abort(new Error("Context aborted"));
+      controller.error(ctx.signal.reason);
+    });
+
+    abort.signal.addEventListener("abort", () => {
+      controller.error(abort.signal.reason);
+    });
+
+    teardown.add(() => {
+      // NO-OP: Purely informative for now
+      log("Connection Teardown", {
+        level: "info",
+        tenant,
+        action: "Bidi",
+        context: { con: connectionId },
+      });
+      subscriptions.forEach((sub) => sub.unsubscribe());
     });
 
     (async () => {
       for await (const request of sources.requests) {
         if (abort.signal.aborted) {
-          break;
+          return;
         }
 
         const requestId = nanoid(8);
 
-        subscriptions.set(requestId, {
-          requestToResponse: of(request)
+        teardown.add(() => {
+          // NO-OP: Purely informative for now
+          log("Request Teardown", {
+            level: "info",
+            tenant,
+            action: "Bidi",
+            context: { con: connectionId, req: requestId },
+          });
+        });
+
+        subscriptions.push(
+          of(request)
             .pipe(
+              tap((req) => requests.push(req)),
               mappers.requestToResponse(
                 tenant,
                 connectionId,
@@ -154,108 +224,94 @@ export abstract class BaseHandler {
                 abort.signal
               )
             )
-            .subscribe((res) => {
-              responses.next(res);
-            }),
-          historyToResponse: sources.history
+            .subscribe({
+              next: (res) => controller.next(res),
+            })
+        );
+
+        subscriptions.push(
+          sources.history
             .pipe(map((his) => his.filter(filters.history)))
             .pipe(
-              mappers.historyToResponse!(
+              mappers.historyToResponse(
                 tenant,
                 connectionId,
                 requestId,
                 abort.signal
               )
             )
-            .subscribe((res) => {
-              responses.next(res);
-            }),
-          errorToRequest: mappers.errorToRequest
-            ? fromEvent(abort.signal, "abort")
-                .pipe(
-                  take(1),
-                  map(() => {
-                    if (abort.signal.reason.name === "AbortError") {
-                      log("Connection Closed", {
-                        level: "warn",
-                        tenant,
-                        action: "Bidi",
-                        context: {
-                          con: connectionId,
-                          req: requestId,
-                        },
-                      });
-                    } else {
-                      log("Connection Aborted", {
-                        level: "error",
-                        tenant,
-                        action: "Bidi",
-                        output: abort.signal.reason.meassage,
-                        context: {
-                          con: connectionId,
-                          req: requestId,
-                        },
-                      });
-                    }
+            .subscribe({
+              next: (res) => controller.next(res),
+            })
+        );
 
-                    return abort.signal.reason;
-                  }),
-                  mappers.errorToRequest(
-                    tenant,
-                    connectionId,
-                    requestId,
-                    abort.signal
-                  ),
-                  mappers.requestToResponse(
-                    tenant,
-                    connectionId,
-                    requestId,
-                    abort.signal
-                  )
-                )
-                .subscribe((res) => {
-                  responses.next(res);
-                })
-            : undefined,
-        });
+        let error: Error | undefined;
+
+        subscriptions.push(
+          controller
+            .pipe(
+              ignoreElements(),
+              catchError((err) => of(err)),
+              take(1),
+              tap((err) => (error = err)),
+              mappers.errorToResponse(
+                tenant,
+                connectionId,
+                requestId,
+                abort.signal
+              )
+            )
+            .subscribe({
+              next: (res) => {
+                controller.next(res);
+              },
+              error: () => {},
+              complete: () => {
+                abort.abort(error);
+              },
+            })
+        );
       }
     })()
-      .catch((e) => {
-        if (e.code === "ERR_STREAM_PREMATURE_CLOSE") {
-          // Graceful shutdown
-          return abort.abort();
-        }
-        abort.abort(e);
+      .catch((err) => {
+        log("Error", {
+          level: "info",
+          tenant,
+          action: "Bidi",
+          output: err.message,
+          context: {
+            con: connectionId,
+            reqs: requests.length,
+          },
+        });
+        controller.error(err);
       })
       .finally(() => {
-        if (!abort.signal.aborted) {
-          abort.abort();
-        }
+        log("Complete", {
+          level: "info",
+          tenant,
+          action: "Bidi",
+          context: { con: connectionId, reqs: requests.length },
+        });
+        controller.error("Stream completed");
       });
 
     for await (const response of iterate(
-      responses
-        .pipe(filter((req) => req.tenant === tenant))
-        .pipe(filter((res) => filters.response(res)))
+      controller.pipe(
+        ignoreErrors(),
+        filter((req) => req.tenant === tenant),
+        filter((res) => filters.response(res))
+      )
     )) {
-      if (response.signal.aborted) {
-        responses.complete();
+      if (abort.signal.aborted) {
+        return;
       }
 
-      if (callbacks?.onResponse) {
-        await callbacks.onResponse(tenant, connectionId, response);
+      if (interceptors?.mutateResponse) {
+        await interceptors.mutateResponse(tenant, connectionId, response);
       }
 
       yield response.response;
     }
-
-    log("Connection Finished", {
-      level: "info",
-      tenant,
-      action: "Bidi",
-      context: {
-        con: connectionId,
-      },
-    });
   }
 }

@@ -15,6 +15,7 @@ import {
 import _ from "lodash";
 import {
   concat,
+  EMPTY,
   filter,
   from,
   interval,
@@ -24,10 +25,11 @@ import {
   OperatorFunction,
   switchMap,
   takeWhile,
+  tap,
 } from "rxjs";
 import { KVHandler } from "./kv";
-import { deserialize } from "../storage/serde";
-import { _INTERNAL, NotFoundError, TenantHistory } from "../storage/kv";
+import { deserialize, serialize } from "../storage/serde";
+import { _INTERNAL, Lease, NotFoundError, TenantHistory } from "../storage/kv";
 import { ConnectError, HandlerContext } from "@connectrpc/connect";
 import { nanoid } from "nanoid";
 
@@ -156,9 +158,12 @@ export class LeaseHandler extends BaseHandler {
             signal
           );
         },
+        errorToResponse: () => {
+          return () => EMPTY;
+        },
       },
       {
-        onResponse: async (tenant, connectionId, res) => {
+        mutateResponse: async (tenant, connectionId, res) => {
           if (res.response.TTL <= 0) {
             await this.revoke(ctx, {
               $typeName: "etcdserverpb.LeaseRevokeRequest",
@@ -166,6 +171,37 @@ export class LeaseHandler extends BaseHandler {
             });
           }
           res.response.header = await this.header(tenant);
+        },
+        beforeComplete: async (tenant, connectionId, reqs, nextFn) => {
+          await Promise.all(
+            reqs.map(async (req) => {
+              const lease = await this.kv.kv.getLease(tenant, Number(req.ID));
+
+              console.log("!!! handling lease before complete !!!", {
+                tenant,
+                connectionId,
+                req,
+                lease,
+              });
+
+              const response: StreamResponse<
+                LeaseKeepAliveRequest,
+                LeaseKeepAliveResponse
+              > = {
+                tenant,
+                connectionId,
+                requestId: "unknown",
+                request: req,
+                response: {
+                  $typeName: "etcdserverpb.LeaseKeepAliveResponse",
+                  ID: req.ID,
+                  TTL: BigInt(lease?.ttlRelative || 0),
+                },
+                signal: ctx.signal,
+              };
+              nextFn(response);
+            })
+          );
         },
       }
     );
@@ -276,7 +312,10 @@ export class LeaseHandler extends BaseHandler {
             // only handling DELETE actions for now
             //  - TODO: decide if we want to handle PUT actions
             filter((h) => h.tenant === tenant && h.action === "DELETE"),
-            map((history) => {
+            map((history) => serialize(history.current.key, "utf8", true)),
+            filter((key) => key.startsWith("__lease:")),
+            map((key) => parseInt(key.split(":")[1])),
+            map((leaseId) => {
               const response: StreamResponse<
                 LeaseKeepAliveRequest,
                 LeaseKeepAliveResponse
@@ -286,11 +325,11 @@ export class LeaseHandler extends BaseHandler {
                 requestId,
                 request: {
                   $typeName: "etcdserverpb.LeaseKeepAliveRequest",
-                  ID: BigInt(history.current.lease),
+                  ID: BigInt(leaseId),
                 },
                 response: {
                   $typeName: "etcdserverpb.LeaseKeepAliveResponse",
-                  ID: BigInt(history.current.lease),
+                  ID: BigInt(leaseId),
                   TTL: BigInt(0),
                 },
                 signal,
@@ -300,8 +339,8 @@ export class LeaseHandler extends BaseHandler {
           )
           .subscribe({
             next(response) {
-              // TODO: temp disabled
-              // subscriber.next(response);
+              console.log("!!! history to response !!!", response);
+              subscriber.next(response);
             },
             error(err) {
               subscriber.error(err);

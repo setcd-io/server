@@ -144,7 +144,8 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
           },
         });
       }),
-      bufferTime(HISTORY_TIMEOUT, undefined, HISTORY_SIZE),
+      // bufferTime(HISTORY_TIMEOUT, undefined, HISTORY_SIZE),
+      map((h) => [h]),
       share()
     );
   }
