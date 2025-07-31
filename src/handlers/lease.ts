@@ -9,67 +9,145 @@ import {
   LeaseLeasesResponse,
   LeaseRevokeRequest,
   LeaseRevokeResponse,
+  LeaseStatus,
   LeaseTimeToLiveRequest,
   LeaseTimeToLiveResponse,
 } from "@setcd-io/connectrpc-etcd";
 import _ from "lodash";
 import {
+  asyncScheduler,
   concat,
+  concatAll,
   EMPTY,
   filter,
+  firstValueFrom,
   from,
   interval,
   map,
   mergeAll,
+  mergeMap,
   Observable,
+  observeOn,
   OperatorFunction,
+  share,
   switchMap,
+  takeUntil,
   takeWhile,
   tap,
+  toArray,
 } from "rxjs";
-import { KVHandler } from "./kv";
 import { deserialize, serialize } from "../storage/serde";
-import { _INTERNAL, Lease, NotFoundError, TenantHistory } from "../storage/kv";
+import { _INTERNAL, TenantHistory, TenantKVTable } from "../storage/kv";
 import { ConnectError, HandlerContext } from "@connectrpc/connect";
-import { nanoid } from "nanoid";
+import { CloudProvider, CloudReplaySubject } from "cloudrx";
+import { log } from "../util/log";
+
+export const ONE_DAY_SEC = 24 * 60 * 60;
+
+export type AbsoluteLease = LeaseGrantResponse & { expires: number };
+export type RelativeLease = AbsoluteLease & { ttlRelative: number };
 
 export class LeaseHandler extends BaseHandler {
-  constructor(ctx: Context, private kv: KVHandler) {
+  private leases: CloudReplaySubject<TenantHistory<AbsoluteLease>>;
+
+  constructor(ctx: Context) {
     super(ctx);
+    this.leases = new CloudReplaySubject<TenantHistory<AbsoluteLease>>(
+      ctx.leaseStorage,
+      {
+        hashFn: (value) => `${value.tenant}:${value.current.ID}`,
+      }
+    );
+    this.leases.on("expired", (h) => {
+      log(h.current, {
+        level: "info",
+        tenant: h.tenant,
+        action: "Lease Expired",
+        context: {
+          action: h.action,
+        },
+      });
+      queueMicrotask(() =>
+        this.revoke(h.tenant, {
+          $typeName: "etcdserverpb.LeaseRevokeRequest",
+          ID: BigInt(h.current.ID),
+        })
+      );
+    });
+  }
+
+  private history$(tenant: string): Observable<TenantHistory<AbsoluteLease>[]> {
+    return this.leases.pipe(
+      filter((h) => h.tenant === tenant),
+      tap((h) => {
+        log(h.previous, {
+          level: "info",
+          action: "LeaseHistory",
+          tenant: h.tenant,
+          output: h.current,
+          context: {
+            action: h.action,
+          },
+        });
+      }),
+      map((h) => [h]),
+      share()
+    );
   }
 
   async grant(
     ctx: HandlerContext,
     req: LeaseGrantRequest
   ): Promise<LeaseGrantResponse> {
-    const requestId = nanoid(8);
-
     const tenant = this.getTenant(ctx);
 
+    if (req.TTL >= ONE_DAY_SEC) {
+      throw new ConnectError("Lease TTL must be less than 1 day");
+    }
+
     if (req.ID !== BigInt(0)) {
-      throw new ConnectError("Client specified Lease ID");
+      throw new ConnectError("Unsupported: Client specified Lease ID");
     }
 
     const leaseId = req.ID || (await this.ctx.nextLease(tenant));
+    const ttl = Number(req.TTL);
+    const expires = CloudProvider.TIME() + ttl;
 
-    await this.kv.kv.putLease(tenant, Number(leaseId), Number(req.TTL));
-
-    return {
+    const response: LeaseGrantResponse = {
       $typeName: "etcdserverpb.LeaseGrantResponse",
       header: await this.header(tenant),
       ID: BigInt(leaseId),
-      TTL: req.TTL,
+      TTL: BigInt(ttl),
       error: "",
     };
+
+    const absolute: AbsoluteLease = {
+      ...response,
+      expires,
+    };
+
+    this.leases.next({ tenant, action: "PUT", current: absolute }, expires);
+
+    return response;
   }
 
-  async revoke(
-    ctx: HandlerContext,
+  public async revoke(
+    ctx: HandlerContext | string,
     req: LeaseRevokeRequest
   ): Promise<LeaseRevokeResponse> {
-    const tenant = this.getTenant(ctx);
+    const tenant = typeof ctx === "string" ? ctx : this.getTenant(ctx);
+    const lease = await this.getLease(tenant, Number(req.ID));
+    const now = CloudProvider.TIME();
 
-    await this.kv.kv.deleteLease(tenant, Number(req.ID));
+    this.leases.next(
+      {
+        tenant,
+        action: "PUT",
+        current: { ...lease, expires: now, TTL: BigInt(0), error: "Revoked" },
+        previous: lease,
+      },
+      now
+    );
 
     return {
       $typeName: "etcdserverpb.LeaseRevokeResponse",
@@ -77,29 +155,74 @@ export class LeaseHandler extends BaseHandler {
     };
   }
 
-  public async timeToLive(
-    ctx: HandlerContext,
-    req: LeaseTimeToLiveRequest
-  ): Promise<LeaseTimeToLiveResponse> {
-    const tenant = this.getTenant(ctx);
-    const lease = await this.kv.kv.getLease(tenant, Number(req.ID));
+  public async all(tenant: string): Promise<AbsoluteLease[]> {
+    const pages = this.leases
+      .snapshot()
+      .pipe(map((l) => l.filter((l) => l.tenant === tenant)));
+
+    return firstValueFrom(
+      pages.pipe(
+        concatAll(),
+        toArray(),
+        map((l) => l.map((h) => h.current))
+      )
+    );
+  }
+
+  public async getLease(
+    tenant: string,
+    leaseId: number
+  ): Promise<RelativeLease> {
+    const leases = await this.all(tenant);
+    let lease = leases.find((l) => BigInt(l.ID) === BigInt(leaseId));
+    const now = CloudProvider.TIME();
 
     if (!lease) {
-      throw new NotFoundError();
+      lease = {
+        $typeName: "etcdserverpb.LeaseGrantResponse",
+        ID: BigInt(leaseId),
+        TTL: BigInt(0),
+        expires: now,
+        error: "Not Found",
+      };
     }
+
+    const relativeLease: RelativeLease = {
+      ...lease,
+      ttlRelative: Math.min(
+        Math.max(lease.expires - now, 0),
+        Number(lease.TTL)
+      ),
+    };
+
+    return relativeLease;
+  }
+
+  public async timeToLive(
+    ctx: HandlerContext,
+    req: LeaseTimeToLiveRequest,
+    kv: TenantKVTable
+  ): Promise<LeaseTimeToLiveResponse> {
+    const tenant = this.getTenant(ctx);
+    const lease = await this.getLease(tenant, Number(req.ID));
+    const now = CloudProvider.TIME();
+
+    const ttlRelative = Math.min(
+      Math.max(lease.expires - now, 0),
+      Number(lease.TTL)
+    );
 
     let keys: Uint8Array[] = [];
     if (req.keys) {
       // Full search with lease
-      const { kvs } = await this.kv.kv.range(
+      const { kvs } = await kv.range(
         tenant,
         {
           $typeName: "etcdserverpb.RangeRequest",
           key: new Uint8Array(1),
           rangeEnd: new Uint8Array(1),
-          maxModRevision: BigInt(lease.revision),
         },
-        { leaseId: lease.leaseId }
+        { leaseId: Number(lease.ID) }
       );
 
       keys = kvs.map((kv) => deserialize(kv.key, true));
@@ -108,22 +231,30 @@ export class LeaseHandler extends BaseHandler {
     return {
       $typeName: "etcdserverpb.LeaseTimeToLiveResponse",
       header: await this.header(tenant),
-      grantedTTL: BigInt(lease.ttl || 0),
-      ID: BigInt(lease.leaseId),
+      grantedTTL: BigInt(lease.TTL),
+      ID: BigInt(lease.ID),
+      TTL: BigInt(ttlRelative),
       keys,
-      TTL: BigInt(lease.ttlRelative),
     };
   }
 
   public async listLeases(
     ctx: HandlerContext,
-    _req: LeaseLeasesRequest
+    req: LeaseLeasesRequest
   ): Promise<LeaseLeasesResponse> {
     const tenant = this.getTenant(ctx);
+    const leases = await this.all(tenant);
+
     return {
       $typeName: "etcdserverpb.LeaseLeasesResponse",
       header: await this.header(tenant),
-      leases: await this.kv.kv.getLeases(tenant),
+      leases: leases.map((lease) => {
+        const status: LeaseStatus = {
+          $typeName: "etcdserverpb.LeaseStatus",
+          ID: BigInt(lease.ID),
+        };
+        return status;
+      }),
     };
   }
 
@@ -134,7 +265,7 @@ export class LeaseHandler extends BaseHandler {
     return this.bidi(
       ctx,
       {
-        history: this.kv.kv.history$(this.getTenant(ctx)),
+        history: this.history$(this.getTenant(ctx)),
         requests,
       },
       {
@@ -158,50 +289,20 @@ export class LeaseHandler extends BaseHandler {
             signal
           );
         },
-        errorToResponse: () => {
-          return () => EMPTY;
+        errorToResponse: (tenant, connectionId, requestId, signal) => {
+          return this.mapErrorToResponse(
+            tenant,
+            connectionId,
+            requestId,
+            signal
+          );
         },
       },
       {
-        mutateResponse: async (tenant, connectionId, res) => {
-          if (res.response.TTL <= 0) {
-            await this.revoke(ctx, {
-              $typeName: "etcdserverpb.LeaseRevokeRequest",
-              ID: res.request.ID,
-            });
-          }
+        response: async (tenant, connectionId, res) => {
+          res = _.cloneDeep(res);
           res.response.header = await this.header(tenant);
-        },
-        beforeComplete: async (tenant, connectionId, reqs, nextFn) => {
-          await Promise.all(
-            reqs.map(async (req) => {
-              const lease = await this.kv.kv.getLease(tenant, Number(req.ID));
-
-              console.log("!!! handling lease before complete !!!", {
-                tenant,
-                connectionId,
-                req,
-                lease,
-              });
-
-              const response: StreamResponse<
-                LeaseKeepAliveRequest,
-                LeaseKeepAliveResponse
-              > = {
-                tenant,
-                connectionId,
-                requestId: "unknown",
-                request: req,
-                response: {
-                  $typeName: "etcdserverpb.LeaseKeepAliveResponse",
-                  ID: req.ID,
-                  TTL: BigInt(lease?.ttlRelative || 0),
-                },
-                signal: ctx.signal,
-              };
-              nextFn(response);
-            })
-          );
+          return res;
         },
       }
     );
@@ -228,21 +329,21 @@ export class LeaseHandler extends BaseHandler {
           .pipe(
             switchMap((source) => {
               const immediate = from(
-                this.kv.kv.getLease(tenant, Number(source.ID))
+                this.getLease(tenant, Number(source.ID))
               ).pipe(
                 map((lease) => {
                   const keepAlive: LeaseKeepAliveResponse = {
                     $typeName: "etcdserverpb.LeaseKeepAliveResponse",
                     ID: source.ID,
-                    TTL: BigInt(lease?.ttlRelative || 0),
+                    TTL: BigInt(lease.ttlRelative),
                   };
                   return { source, keepAlive };
                 })
               );
 
               const loop = interval(1000).pipe(
-                switchMap(() => this.kv.kv.getLease(tenant, Number(source.ID))),
-                takeWhile((lease) => !!lease),
+                switchMap(() => this.getLease(tenant, Number(source.ID))),
+                takeWhile((lease) => !!lease.error, true),
                 map((lease) => {
                   const keepAlive: LeaseKeepAliveResponse = {
                     $typeName: "etcdserverpb.LeaseKeepAliveResponse",
@@ -295,11 +396,11 @@ export class LeaseHandler extends BaseHandler {
     requestId: string,
     signal: AbortSignal
   ): OperatorFunction<
-    TenantHistory[],
+    TenantHistory<AbsoluteLease>[],
     StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
   > {
     return (
-      source: Observable<TenantHistory[]>
+      source: Observable<TenantHistory<AbsoluteLease>[]>
     ): Observable<
       StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
     > => {
@@ -312,10 +413,7 @@ export class LeaseHandler extends BaseHandler {
             // only handling DELETE actions for now
             //  - TODO: decide if we want to handle PUT actions
             filter((h) => h.tenant === tenant && h.action === "DELETE"),
-            map((history) => serialize(history.current.key, "utf8", true)),
-            filter((key) => key.startsWith("__lease:")),
-            map((key) => parseInt(key.split(":")[1])),
-            map((leaseId) => {
+            map((history) => {
               const response: StreamResponse<
                 LeaseKeepAliveRequest,
                 LeaseKeepAliveResponse
@@ -325,11 +423,11 @@ export class LeaseHandler extends BaseHandler {
                 requestId,
                 request: {
                   $typeName: "etcdserverpb.LeaseKeepAliveRequest",
-                  ID: BigInt(leaseId),
+                  ID: BigInt(history.current.ID),
                 },
                 response: {
                   $typeName: "etcdserverpb.LeaseKeepAliveResponse",
-                  ID: BigInt(leaseId),
+                  ID: BigInt(history.current.ID),
                   TTL: BigInt(0),
                 },
                 signal,
@@ -339,7 +437,6 @@ export class LeaseHandler extends BaseHandler {
           )
           .subscribe({
             next(response) {
-              console.log("!!! history to response !!!", response);
               subscriber.next(response);
             },
             error(err) {
@@ -349,6 +446,60 @@ export class LeaseHandler extends BaseHandler {
               subscriber.complete();
             },
           });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      });
+    };
+  }
+
+  mapErrorToResponse(
+    tenant: string,
+    connectionId: string,
+    requestId: string,
+    signal: AbortSignal
+  ): OperatorFunction<
+    Error,
+    StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+  > {
+    return (
+      source: Observable<Error>
+    ): Observable<
+      StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+    > => {
+      return new Observable<
+        StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
+      >((subscriber) => {
+        const subscription = source.subscribe({
+          next(err) {
+            const response: StreamResponse<
+              LeaseKeepAliveRequest,
+              LeaseKeepAliveResponse
+            > = {
+              tenant,
+              connectionId,
+              requestId,
+              request: {
+                $typeName: "etcdserverpb.LeaseKeepAliveRequest",
+                ID: BigInt(0),
+              },
+              response: {
+                $typeName: "etcdserverpb.LeaseKeepAliveResponse",
+                ID: BigInt(0),
+                TTL: BigInt(0),
+              },
+              signal,
+            };
+            subscriber.next(response);
+          },
+          error(err) {
+            subscriber.error(err);
+          },
+          complete() {
+            subscriber.complete();
+          },
+        });
 
         return () => {
           subscription.unsubscribe();

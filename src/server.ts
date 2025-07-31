@@ -89,8 +89,8 @@ async function main(ctx: Context) {
 
   // const tableMonitor = new TableMonitor(ctx);
   const auth = new AuthHandler(ctx);
-  const kv = new KVHandler(ctx);
-  const lease = new LeaseHandler(ctx, kv);
+  const lease = new LeaseHandler(ctx);
+  const kv = new KVHandler(ctx, lease);
   const watch = new WatchHandler(ctx, kv);
   const maintenance = new MaintenanceHandler(ctx);
   const cluster = new ClusterHandler(ctx);

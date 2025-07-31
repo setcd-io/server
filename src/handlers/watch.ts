@@ -200,7 +200,8 @@ export class WatchHandler extends BaseHandler {
         },
       },
       {
-        mutateResponse: async (tenant, connectionId, res) => {
+        response: async (tenant, connectionId, res) => {
+          res = _.cloneDeep(res);
           res.response.header = await this.header(tenant);
 
           if (
@@ -242,6 +243,8 @@ export class WatchHandler extends BaseHandler {
           if (res.request.requestUnion.case === "cancelRequest") {
             this.watches.get(tenant)?.delete(Number(res.response.watchId));
           }
+
+          return res;
         },
       }
     );
@@ -401,11 +404,11 @@ export class WatchHandler extends BaseHandler {
     requestId: string,
     signal: AbortSignal
   ): OperatorFunction<
-    TenantHistory[],
+    TenantHistory<KeyValue>[],
     StreamResponse<WatchRequest, WatchResponse>
   > {
     return (
-      source: Observable<TenantHistory[]>
+      source: Observable<TenantHistory<KeyValue>[]>
     ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
       return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
         (subscriber) => {
@@ -547,13 +550,6 @@ export class WatchHandler extends BaseHandler {
           const subscription = source
             .pipe(
               concatMap((source) => {
-                console.log(
-                  "!!! mapping error to request !!!",
-                  source,
-                  tenant,
-                  connectionId,
-                  requestId
-                );
                 return from(
                   Array.from(this.watches.get(tenant)?.values() || []).map(
                     (watch) => {

@@ -79,7 +79,7 @@ export const createRouter = (handlers: {
           return handlers.lease.keepAlive(ctx, req);
         },
         leaseTimeToLive(req, ctx) {
-          return schedule(handlers.lease.timeToLive(ctx, req));
+          return schedule(handlers.lease.timeToLive(ctx, req, handlers.kv.kv));
         },
         leaseLeases(req, ctx) {
           return schedule(handlers.lease.listLeases(ctx, req));

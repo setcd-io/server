@@ -4,6 +4,7 @@ import {
   asapScheduler,
   asyncScheduler,
   catchError,
+  concatMap,
   defer,
   EMPTY,
   filter,
@@ -11,6 +12,7 @@ import {
   fromEvent,
   ignoreElements,
   map,
+  mergeMap,
   MonoTypeOperatorFunction,
   NEVER,
   Observable,
@@ -32,7 +34,7 @@ import { CONNECTION_ID, TENANT } from "../util/const";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
 import { nanoid } from "nanoid";
-import { iterate } from "../util/async";
+import { AsyncObservable, iterate } from "../util/async";
 import { log } from "../util/log";
 
 export type StreamRequest<Req> = {
@@ -53,7 +55,14 @@ export type StreamResponse<Req, Res> = {
 };
 
 const ignoreErrors = <T>(): OperatorFunction<T, T> => {
-  return (source: Observable<T>) => source.pipe(catchError(() => EMPTY));
+  return (source: Observable<T>) => {
+    return source.pipe(
+      catchError((err) => {
+        console.info("!!! Error ignored:", err);
+        return NEVER;
+      })
+    );
+  };
 };
 
 export abstract class BaseHandler {
@@ -85,14 +94,14 @@ export abstract class BaseHandler {
     return tenant;
   }
 
-  public async *bidi<Req, Res>(
+  public async *bidi<Req, Res, T>(
     ctx: HandlerContext,
     sources: {
       requests: AsyncIterable<Req>;
-      history: Observable<TenantHistory[]>;
+      history: Observable<TenantHistory<T>[]>;
     },
     filters: {
-      history: (history: TenantHistory) => boolean;
+      history: (history: TenantHistory<T>) => boolean;
       response: (res: StreamResponse<Req, Res>) => boolean;
     },
     mappers: {
@@ -107,7 +116,7 @@ export abstract class BaseHandler {
         connectionId: string,
         requestId: string,
         signal: AbortSignal
-      ) => OperatorFunction<TenantHistory[], StreamResponse<Req, Res>>;
+      ) => OperatorFunction<TenantHistory<T>[], StreamResponse<Req, Res>>;
       errorToResponse: (
         tenant: string,
         connectionId: string,
@@ -115,84 +124,65 @@ export abstract class BaseHandler {
         signal: AbortSignal
       ) => OperatorFunction<Error, StreamResponse<Req, Res>>;
     },
-    interceptors?: {
-      mutateResponse?: (
+    mutators: {
+      response: (
         tenant: string,
         connectionId: string,
         res: StreamResponse<Req, Res>
-      ) => Promise<void>;
-      beforeComplete?: (
-        tenant: string,
-        connectionId: string,
-        reqs: Req[],
-        nextFn: (value: StreamResponse<Req, Res>) => void
-      ) => Promise<void>;
+      ) => Promise<StreamResponse<Req, Res>>;
     }
   ): AsyncGenerator<Res, void, unknown> {
     const abort = new AbortController();
     const tenant = this.getTenant(ctx);
     const connectionId = this.getConnectionId(ctx);
 
-    const requests: Req[] = [];
-    const controller = new Subject<StreamResponse<Req, Res>>();
+    const responses = new Subject<StreamResponse<Req, Res>>();
     const subscriptions: Subscription[] = [];
 
-    // DEVNOTE: The only way to shutdown a stream is to call controller.error()
-    // - This is so beforeComplete is guaranteed to be called
-    const teardown = controller
-      .pipe(
-        // ignoreElements(),
-        catchError(() =>
-          defer(() =>
-            (
-              interceptors?.beforeComplete?.(
-                tenant,
-                connectionId,
-                requests,
-                (res) => controller.next(res)
-              ) ?? Promise.resolve()
-            ).then(() =>
-              // subscriptions.push(
-              //   asyncScheduler.schedule(
-              //     () => ,
-              //     1000 // Give some time for next calls to complete
-              //   )
-              // )
-              controller.complete()
-            )
-          )
+    subscriptions.push(
+      responses
+        .pipe(
+          catchError((err) => {
+            log("Stream error", {
+              level: "info",
+              tenant,
+              action: "Bidi",
+              output: err.message,
+              context: { con: connectionId },
+            });
+            return EMPTY;
+          })
         )
-      )
-      .subscribe({
-        complete: () => {
-          log("Stream completed", {
-            level: "info",
-            tenant,
-            action: "Bidi",
-            context: { con: connectionId, reqs: requests.length },
-          });
-        },
-      });
-
-    // subscriptions.push(teardown);
+        .subscribe({
+          complete: () => {
+            log("Stream completed", {
+              level: "info",
+              tenant,
+              action: "Bidi",
+              context: { con: connectionId },
+            });
+          },
+        })
+    );
 
     ctx.signal.addEventListener("abort", () => {
-      controller.error(ctx.signal.reason);
-    });
-
-    abort.signal.addEventListener("abort", () => {
-      controller.error(abort.signal.reason);
-    });
-
-    teardown.add(() => {
-      // NO-OP: Purely informative for now
-      log("Connection Teardown", {
-        level: "info",
+      log("Context aborted", {
+        level: "warn",
         tenant,
         action: "Bidi",
         context: { con: connectionId },
       });
-      subscriptions.forEach((sub) => sub.unsubscribe());
+      abort.abort(ctx.signal.reason);
+    });
+
+    abort.signal.addEventListener("abort", () => {
+      log("Stream aborted", {
+        level: "warn",
+        tenant,
+        action: "Bidi",
+        context: { con: connectionId },
+      });
+      responses.error(abort.signal.reason);
     });
 
     (async () => {
@@ -203,20 +193,9 @@ export abstract class BaseHandler {
 
         const requestId = nanoid(8);
 
-        teardown.add(() => {
-          // NO-OP: Purely informative for now
-          log("Request Teardown", {
-            level: "info",
-            tenant,
-            action: "Bidi",
-            context: { con: connectionId, req: requestId },
-          });
-        });
-
         subscriptions.push(
           of(request)
             .pipe(
-              tap((req) => requests.push(req)),
               mappers.requestToResponse(
                 tenant,
                 connectionId,
@@ -225,7 +204,24 @@ export abstract class BaseHandler {
               )
             )
             .subscribe({
-              next: (res) => controller.next(res),
+              next: (res) => responses.next(res),
+              error: (err) => {
+                log("Unable to map request", {
+                  level: "warn",
+                  tenant,
+                  action: "Bidi",
+                  output: err.message,
+                  context: { con: connectionId, req: requestId },
+                });
+              },
+              complete: () => {
+                log("Request completed", {
+                  level: "info",
+                  tenant,
+                  action: "Bidi",
+                  context: { con: connectionId, req: requestId },
+                });
+              },
             })
         );
 
@@ -241,19 +237,32 @@ export abstract class BaseHandler {
               )
             )
             .subscribe({
-              next: (res) => controller.next(res),
+              next: (response) => responses.next(response),
+              error: (err) => {
+                log("Unable to map history", {
+                  level: "warn",
+                  tenant,
+                  action: "Bidi",
+                  output: err.message,
+                  context: { con: connectionId, req: requestId },
+                });
+              },
+              complete: () => {
+                log("History completed", {
+                  level: "info",
+                  tenant,
+                  action: "Bidi",
+                  context: { con: connectionId, req: requestId },
+                });
+              },
             })
         );
 
-        let error: Error | undefined;
-
         subscriptions.push(
-          controller
+          responses
             .pipe(
               ignoreElements(),
               catchError((err) => of(err)),
-              take(1),
-              tap((err) => (error = err)),
               mappers.errorToResponse(
                 tenant,
                 connectionId,
@@ -262,56 +271,78 @@ export abstract class BaseHandler {
               )
             )
             .subscribe({
-              next: (res) => {
-                controller.next(res);
+              next: (response) => {
+                responses.next(response);
               },
-              error: () => {},
+              error: () => {
+                log("Unable to map error", {
+                  level: "warn",
+                  tenant,
+                  action: "Bidi",
+                  context: { con: connectionId, req: requestId },
+                });
+              },
               complete: () => {
-                abort.abort(error);
+                log("Error mapping completed", {
+                  level: "info",
+                  tenant,
+                  action: "Bidi",
+                  context: { con: connectionId, req: requestId },
+                });
               },
             })
         );
       }
     })()
       .catch((err) => {
-        log("Error", {
+        log("Requests Error", {
           level: "info",
           tenant,
           action: "Bidi",
           output: err.message,
           context: {
             con: connectionId,
-            reqs: requests.length,
           },
         });
-        controller.error(err);
+        responses.error(err);
       })
       .finally(() => {
-        log("Complete", {
+        log("Requests Complete", {
           level: "info",
           tenant,
           action: "Bidi",
-          context: { con: connectionId, reqs: requests.length },
+          context: { con: connectionId },
         });
-        controller.error("Stream completed");
+        responses.error(new Error("Requests completed"));
       });
 
-    for await (const response of iterate(
-      controller.pipe(
-        ignoreErrors(),
-        filter((req) => req.tenant === tenant),
-        filter((res) => filters.response(res))
-      )
-    )) {
-      if (abort.signal.aborted) {
-        return;
+    try {
+      for await (const response of AsyncObservable.from(
+        responses.pipe(
+          ignoreErrors(),
+          filter((req) => req.tenant === tenant),
+          filter((res) => filters.response(res)),
+          concatMap((res) => mutators.response(tenant, connectionId, res))
+        )
+      )) {
+        yield response.response;
       }
-
-      if (interceptors?.mutateResponse) {
-        await interceptors.mutateResponse(tenant, connectionId, response);
-      }
-
-      yield response.response;
+    } catch (err) {
+      log("Responses Error", {
+        level: "warn",
+        tenant,
+        action: "Bidi",
+        output: err.message,
+        context: { con: connectionId },
+      });
+    } finally {
+      log("Responses Complete", {
+        level: "info",
+        tenant,
+        action: "Bidi",
+        context: { con: connectionId },
+      });
+      subscriptions.forEach((sub) => sub.unsubscribe());
     }
   }
 }

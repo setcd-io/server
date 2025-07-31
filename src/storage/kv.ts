@@ -37,6 +37,7 @@ import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { CloudReplaySubject } from "cloudrx";
 import { log } from "../util/log";
+import { LeaseHandler } from "../handlers/lease";
 
 export const _INTERNAL_LEASE_ID__LEASES = -1;
 export const _INTERNAL = {
@@ -48,17 +49,6 @@ export class NotFoundError extends ConnectError {
     super("Not Found");
   }
 }
-
-export type Lease = {
-  tenant: string;
-  key: string;
-  revision: number;
-  leaseId: number;
-  ttl?: number;
-  expires?: number;
-};
-
-export type RelativeLease = Lease & { ttlRelative: number };
 
 export type KVSchema = TenantSchema & {
   key: string;
@@ -91,25 +81,27 @@ const lastChar = (str: string | undefined): number | undefined => {
 const HISTORY_TIMEOUT = 1000;
 const HISTORY_SIZE = HISTORY_TIMEOUT / 10;
 
-export type TenantHistory = {
+export type TenantHistory<T> = {
   tenant: string;
   action: "PUT" | "DELETE";
-  current: KeyValue;
-  previous?: KeyValue;
+  current: T;
+  previous?: T;
 };
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
-  private history: CloudReplaySubject<TenantHistory>;
+  private history: CloudReplaySubject<TenantHistory<KeyValue>>;
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, private leaseHandler: LeaseHandler) {
     super(ctx, "kv");
 
-    this.history = new CloudReplaySubject<TenantHistory>(ctx.historyStorage);
+    this.history = new CloudReplaySubject<TenantHistory<KeyValue>>(
+      ctx.historyStorage
+    );
     this.history.on("expired", (h) => {
       log(h.current, {
         level: "info",
         tenant: h.tenant,
-        action: "Expired",
+        action: "KeyVaue Expired",
         context: {
           action: h.action,
         },
@@ -124,7 +116,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     });
   }
 
-  public history$(tenant: string): Observable<TenantHistory[]> {
+  public history$(tenant: string): Observable<TenantHistory<KeyValue>[]> {
     return from(this.ctx.minRevision(tenant)).pipe(
       switchMap((minRevision) =>
         this.history.pipe(
@@ -136,7 +128,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       tap((h) => {
         log(h.previous, {
           level: "info",
-          action: "History",
+          action: "KeyValueHistory",
           tenant: h.tenant,
           output: h.current,
           context: {
@@ -177,13 +169,9 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     };
 
     if (lease > 0) {
-      const relativeLease = await this.getLease(tenant, lease);
-      if (!relativeLease) {
-        throw new ConnectError("Lease not found");
-      }
-
+      const relativeLease = await this.leaseHandler.getLease(tenant, lease);
       current.expires = relativeLease.expires;
-      current.lease = relativeLease.leaseId;
+      current.lease = Number(relativeLease.ID);
     }
 
     try {
@@ -468,10 +456,14 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     const _q = query.serialize();
 
     const leases =
-      opts?.leaseId !== _INTERNAL.LEASE_ID ? await this.getLeases(tenant) : [];
+      opts?.leaseId !== _INTERNAL.LEASE_ID
+        ? await this.leaseHandler.all(tenant)
+        : [];
 
     let items = await all(query, (i) => {
-      return i.lease <= 0 || leases.some((l) => l.ID === BigInt(i.lease));
+      return (
+        i.lease <= 0 || leases.some((l) => BigInt(l.ID) === BigInt(i.lease))
+      );
     });
 
     if (opts?.handler) {
@@ -506,166 +498,6 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     return items || [];
   }
 
-  async putLease(
-    tenant: string,
-    leaseId: number,
-    ttl: number
-  ): Promise<RelativeLease> {
-    const revision = await this.ctx.nextRevision(tenant);
-    const key = `__lease:${leaseId}`;
-
-    const lease: Lease = {
-      key,
-      tenant,
-      revision,
-      leaseId,
-      ttl,
-      expires: Math.ceil(Date.now() / 1000) + ttl,
-    };
-
-    await this.putKey(
-      tenant,
-      new Uint8Array(Buffer.from(key)),
-      new Uint8Array(Buffer.from(JSON.stringify(lease), "utf8")),
-      revision,
-      _INTERNAL.LEASE_ID,
-      {
-        expires: lease.expires,
-      }
-    );
-
-    return {
-      ...lease,
-      ttlRelative: ttl,
-    };
-  }
-
-  async deleteLease(tenant: string, leaseId: number): Promise<RelativeLease> {
-    const revision = await this.ctx.currentRevision(tenant);
-    const key = deserialize<Uint8Array>(`__lease:${leaseId}`, true);
-
-    await this.range(
-      tenant,
-      {
-        $typeName: "etcdserverpb.RangeRequest",
-        key,
-        rangeEnd: new Uint8Array(0),
-        limit: 1n,
-        maxModRevision: BigInt(revision),
-      },
-      {
-        leaseId: _INTERNAL.LEASE_ID,
-        handler: (lease) =>
-          this.deleteKey(
-            lease.tenant,
-            deserialize(lease.key, true),
-            Number(lease.modRevision)
-          ),
-      }
-    );
-
-    return {
-      key: serialize(key, "utf8", true),
-      tenant,
-      revision,
-      leaseId: Number(leaseId),
-      expires: Math.floor(Date.now() / 1000),
-      ttl: 0,
-      ttlRelative: 0,
-    };
-  }
-
-  async getLeases(tenant: string): Promise<LeaseStatus[]> {
-    const revision = await this.ctx.currentRevision(tenant);
-    const prefix = `__lease:`;
-
-    const { kvs } = await this.range(
-      tenant,
-      {
-        $typeName: "etcdserverpb.RangeRequest",
-        key: new Uint8Array(Buffer.from(prefix)),
-        rangeEnd: new Uint8Array(1),
-        maxModRevision: BigInt(revision),
-      },
-      {
-        leaseId: _INTERNAL.LEASE_ID,
-      }
-    );
-
-    return kvs.map((kv) => {
-      const { value } = kv;
-      const { leaseId } = JSON.parse(
-        Buffer.from(deserialize<Uint8Array>(value, true)).toString("utf8")
-      ) as Partial<Lease>;
-      return {
-        $typeName: "etcdserverpb.LeaseStatus",
-        ID: BigInt(leaseId!),
-      };
-    });
-  }
-
-  async getLease(
-    tenant: string,
-    lease: number
-  ): Promise<RelativeLease | undefined> {
-    const revision = await this.ctx.currentRevision(tenant);
-    const key = `__lease:${lease}`;
-
-    if (lease === 0) {
-      return {
-        key,
-        tenant,
-        revision,
-        leaseId: 0,
-        ttlRelative: Number.MAX_SAFE_INTEGER,
-      };
-    }
-
-    const { kvs } = await this.range(
-      tenant,
-      {
-        $typeName: "etcdserverpb.RangeRequest",
-        key: new Uint8Array(Buffer.from(key)),
-        rangeEnd: new Uint8Array(0),
-        limit: 1n,
-        maxModRevision: BigInt(revision),
-      },
-      {
-        leaseId: _INTERNAL.LEASE_ID,
-      }
-    );
-
-    const deserialized = deserialize<Uint8Array>(kvs[0]?.value, false);
-
-    if (!deserialized) {
-      return {
-        key,
-        tenant,
-        revision,
-        leaseId: Number(lease),
-        expires: Math.floor(Date.now() / 1000),
-        ttl: 0,
-        ttlRelative: 0,
-      };
-    }
-
-    const { expires, ttl } = JSON.parse(
-      Buffer.from(deserialized).toString("utf8")
-    ) as Partial<Lease>;
-
-    return {
-      key,
-      tenant,
-      revision,
-      leaseId: Number(lease),
-      expires,
-      ttl,
-      ttlRelative: expires
-        ? Math.max(Math.floor(expires - Date.now() / 1000), 0)
-        : 0,
-    };
-  }
-
   async all(tenant: string, key?: Uint8Array | string): Promise<KVSchema[]> {
     const table = await this.table(tenant);
     const { Items: items } = await table
@@ -691,7 +523,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     tenant: string,
     key: Uint8Array | string,
     revision?: number
-  ): Promise<TenantHistory | undefined> {
+  ): Promise<TenantHistory<KeyValue> | undefined> {
     if (key instanceof Uint8Array) {
       key = serialize(key, "utf8", true);
     }

@@ -22,14 +22,15 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { ErrGRPCCompacted, ErrGRPCKeyNotFound } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
+import { LeaseHandler } from "./lease";
 
 export class KVHandler extends BaseHandler {
   private records = new Subject<DynamoDBRecord>();
   kv: TenantKVTable;
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, leaseHandler: LeaseHandler) {
     super(ctx);
-    this.kv = new TenantKVTable(ctx);
+    this.kv = new TenantKVTable(ctx, leaseHandler);
   }
 
   public dynamodbHandler() {
