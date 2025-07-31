@@ -62,7 +62,7 @@ export class LeaseHandler extends BaseHandler {
       log(h.current, {
         level: "info",
         tenant: h.tenant,
-        action: "Lease Expired",
+        action: "LeaseExpire",
         context: {
           action: h.action,
         },
@@ -142,7 +142,7 @@ export class LeaseHandler extends BaseHandler {
     this.leases.next(
       {
         tenant,
-        action: "PUT",
+        action: "DELETE",
         current: { ...lease, expires: now, TTL: BigInt(0), error: "Revoked" },
         previous: lease,
       },
@@ -343,7 +343,7 @@ export class LeaseHandler extends BaseHandler {
 
               const loop = interval(1000).pipe(
                 switchMap(() => this.getLease(tenant, Number(source.ID))),
-                takeWhile((lease) => !!lease.error, true),
+                takeWhile((lease) => lease.ttlRelative > 0, true),
                 map((lease) => {
                   const keepAlive: LeaseKeepAliveResponse = {
                     $typeName: "etcdserverpb.LeaseKeepAliveResponse",
@@ -410,8 +410,6 @@ export class LeaseHandler extends BaseHandler {
         const subscription = source
           .pipe(
             mergeAll(),
-            // only handling DELETE actions for now
-            //  - TODO: decide if we want to handle PUT actions
             filter((h) => h.tenant === tenant && h.action === "DELETE"),
             map((history) => {
               const response: StreamResponse<
@@ -473,25 +471,13 @@ export class LeaseHandler extends BaseHandler {
       >((subscriber) => {
         const subscription = source.subscribe({
           next(err) {
-            const response: StreamResponse<
-              LeaseKeepAliveRequest,
-              LeaseKeepAliveResponse
-            > = {
+            log("Lease Error", {
+              level: "warn",
               tenant,
-              connectionId,
-              requestId,
-              request: {
-                $typeName: "etcdserverpb.LeaseKeepAliveRequest",
-                ID: BigInt(0),
-              },
-              response: {
-                $typeName: "etcdserverpb.LeaseKeepAliveResponse",
-                ID: BigInt(0),
-                TTL: BigInt(0),
-              },
-              signal,
-            };
-            subscriber.next(response);
+              action: "Lease",
+              output: err.message,
+              context: { con: connectionId, req: requestId },
+            });
           },
           error(err) {
             subscriber.error(err);

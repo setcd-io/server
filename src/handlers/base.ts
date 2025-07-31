@@ -54,17 +54,6 @@ export type StreamResponse<Req, Res> = {
   signal: AbortSignal;
 };
 
-const ignoreErrors = <T>(): OperatorFunction<T, T> => {
-  return (source: Observable<T>) => {
-    return source.pipe(
-      catchError((err) => {
-        console.info("!!! Error ignored:", err);
-        return NEVER;
-      })
-    );
-  };
-};
-
 export abstract class BaseHandler {
   constructor(protected ctx: Context) {}
 
@@ -313,13 +302,12 @@ export abstract class BaseHandler {
           action: "Bidi",
           context: { con: connectionId },
         });
-        responses.error(new Error("Requests completed"));
+        responses.error(new Error("Requests Complete"));
       });
 
     try {
       for await (const response of AsyncObservable.from(
         responses.pipe(
-          ignoreErrors(),
           filter((req) => req.tenant === tenant),
           filter((res) => filters.response(res)),
           concatMap((res) => mutators.response(tenant, connectionId, res))
