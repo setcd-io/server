@@ -370,7 +370,6 @@ export class WatchHandler extends BaseHandler {
                     response.response.created = false;
                     response.response.canceled = false;
                     response.response.events = [];
-                    console.log("!!! progress notify response", response);
                     return response;
                   })
                 );
