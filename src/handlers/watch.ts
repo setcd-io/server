@@ -364,12 +364,13 @@ export class WatchHandler extends BaseHandler {
                       .get(res.tenant)
                       ?.get(Number(res.response.watchId))
                   ),
-                  takeWhile((watch) => !!watch && watch.progressNotify, false),
+                  takeWhile((watch) => !!watch, false),
                   map(() => {
                     const response = _.cloneDeep(res);
                     response.response.created = false;
                     response.response.canceled = false;
                     response.response.events = [];
+                    console.log("!!! progress notify response", response);
                     return response;
                   })
                 );
