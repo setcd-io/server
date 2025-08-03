@@ -15,28 +15,23 @@ import {
 } from "@setcd-io/connectrpc-etcd";
 import _ from "lodash";
 import {
-  asyncScheduler,
   concat,
   concatAll,
-  EMPTY,
   filter,
   firstValueFrom,
   from,
   interval,
   map,
   mergeAll,
-  mergeMap,
+  NEVER,
   Observable,
-  observeOn,
   OperatorFunction,
   share,
   switchMap,
-  takeUntil,
   takeWhile,
-  tap,
   toArray,
 } from "rxjs";
-import { deserialize, serialize } from "../storage/serde";
+import { deserialize } from "../storage/serde";
 import { _INTERNAL, TenantHistory, TenantKVTable } from "../storage/kv";
 import { ConnectError, HandlerContext } from "@connectrpc/connect";
 import { CloudProvider, CloudReplaySubject } from "cloudrx";
@@ -44,55 +39,52 @@ import { log } from "../util/log";
 
 export const ONE_DAY_SEC = 24 * 60 * 60;
 
-export type AbsoluteLease = LeaseGrantResponse & { expires: number };
-export type RelativeLease = AbsoluteLease & { ttlRelative: number };
+export type StoredLease = LeaseGrantResponse & {
+  tenant: string;
+  expires: number;
+};
+export type RelativeLease = StoredLease & { ttlRelative: number };
+
+const mapLease = (): OperatorFunction<StoredLease, RelativeLease> => {
+  return (source: Observable<StoredLease>): Observable<RelativeLease> => {
+    return new Observable<RelativeLease>((subscriber) => {
+      const subscription = source
+        .pipe(
+          map((lease) => {
+            const relative: RelativeLease = {
+              ...lease,
+              ttlRelative: Math.min(
+                Math.max(lease.expires - CloudProvider.TIME(), 0),
+                Number(lease.TTL)
+              ),
+            };
+
+            if (lease.TTL <= BigInt(0)) {
+              relative.ttlRelative = 0;
+            }
+
+            return relative;
+          })
+        )
+        .subscribe(subscriber);
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    });
+  };
+};
 
 export class LeaseHandler extends BaseHandler {
-  private leases: CloudReplaySubject<TenantHistory<AbsoluteLease>>;
+  private _leases: CloudReplaySubject<StoredLease>;
+  public readonly leases: Observable<RelativeLease>;
 
   constructor(ctx: Context) {
     super(ctx);
-    this.leases = new CloudReplaySubject<TenantHistory<AbsoluteLease>>(
-      ctx.leaseStorage,
-      {
-        hashFn: (value) => `${value.tenant}:${value.current.ID}`,
-      }
-    );
-    this.leases.on("expired", (h) => {
-      log(h.current, {
-        level: "info",
-        tenant: h.tenant,
-        action: "LeaseExpire",
-        context: {
-          action: h.action,
-        },
-      });
-      queueMicrotask(() =>
-        this.revoke(h.tenant, {
-          $typeName: "etcdserverpb.LeaseRevokeRequest",
-          ID: BigInt(h.current.ID),
-        })
-      );
+    this._leases = new CloudReplaySubject<StoredLease>(ctx.leaseStorage, {
+      hashFn: (value) => `${value.tenant}:${value.ID}`,
     });
-  }
-
-  private history$(tenant: string): Observable<TenantHistory<AbsoluteLease>[]> {
-    return this.leases.pipe(
-      filter((h) => h.tenant === tenant),
-      tap((h) => {
-        log(h.previous, {
-          level: "info",
-          action: "LeaseHistory",
-          tenant: h.tenant,
-          output: h.current,
-          context: {
-            action: h.action,
-          },
-        });
-      }),
-      map((h) => [h]),
-      share()
-    );
+    this.leases = this._leases.pipe(mapLease(), share());
   }
 
   async grant(
@@ -121,12 +113,16 @@ export class LeaseHandler extends BaseHandler {
       error: "",
     };
 
-    const absolute: AbsoluteLease = {
-      ...response,
+    const current: StoredLease = {
+      $typeName: "etcdserverpb.LeaseGrantResponse",
+      ID: BigInt(leaseId),
+      TTL: BigInt(ttl),
       expires,
+      error: "",
+      tenant,
     };
 
-    this.leases.next({ tenant, action: "PUT", current: absolute }, expires);
+    this._leases.next(current, expires);
 
     return response;
   }
@@ -139,15 +135,24 @@ export class LeaseHandler extends BaseHandler {
     const lease = await this.getLease(tenant, Number(req.ID));
     const now = CloudProvider.TIME();
 
-    this.leases.next(
-      {
-        tenant,
-        action: "DELETE",
-        current: { ...lease, expires: now, TTL: BigInt(0), error: "Revoked" },
-        previous: lease,
-      },
-      now
-    );
+    lease.TTL = BigInt(0);
+    lease.expires = now;
+    lease.error = "Revoked";
+
+    this._leases.next(lease, now);
+
+    await new Promise<void>((resolve) => {
+      const handler = (expired: StoredLease) => {
+        if (
+          expired.tenant === tenant &&
+          BigInt(expired.ID) === BigInt(req.ID)
+        ) {
+          this._leases.off("expired", handler);
+          resolve();
+        }
+      };
+      this._leases.on("expired", handler);
+    });
 
     return {
       $typeName: "etcdserverpb.LeaseRevokeResponse",
@@ -155,18 +160,18 @@ export class LeaseHandler extends BaseHandler {
     };
   }
 
-  public async all(tenant: string): Promise<AbsoluteLease[]> {
-    const pages = this.leases
+  public async all(tenant: string): Promise<RelativeLease[]> {
+    const pages = this._leases
       .snapshot()
-      .pipe(map((l) => l.filter((l) => l.tenant === tenant)));
+      .pipe(
+        map((l) =>
+          l.filter(
+            (l) => l.tenant === tenant && l.expires > CloudProvider.TIME()
+          )
+        )
+      );
 
-    return firstValueFrom(
-      pages.pipe(
-        concatAll(),
-        toArray(),
-        map((l) => l.map((h) => h.current))
-      )
-    );
+    return firstValueFrom(pages.pipe(concatAll(), mapLease(), toArray()));
   }
 
   public async getLease(
@@ -175,35 +180,28 @@ export class LeaseHandler extends BaseHandler {
   ): Promise<RelativeLease> {
     const leases = await this.all(tenant);
     let lease = leases.find((l) => BigInt(l.ID) === BigInt(leaseId));
-    const now = CloudProvider.TIME();
 
     if (!lease) {
-      lease = {
+      return {
         $typeName: "etcdserverpb.LeaseGrantResponse",
         ID: BigInt(leaseId),
         TTL: BigInt(0),
-        expires: now,
-        error: "Not Found",
+        expires: CloudProvider.TIME(),
+        error: "Lease not found",
+        tenant,
+        ttlRelative: 0,
       };
     }
 
-    const relativeLease: RelativeLease = {
-      ...lease,
-      ttlRelative: Math.min(
-        Math.max(lease.expires - now, 0),
-        Number(lease.TTL)
-      ),
-    };
-
-    return relativeLease;
+    return lease;
   }
 
   public async timeToLive(
-    ctx: HandlerContext,
+    ctx: HandlerContext | string,
     req: LeaseTimeToLiveRequest,
     kv: TenantKVTable
   ): Promise<LeaseTimeToLiveResponse> {
-    const tenant = this.getTenant(ctx);
+    const tenant = typeof ctx === "string" ? ctx : this.getTenant(ctx);
     const lease = await this.getLease(tenant, Number(req.ID));
     const now = CloudProvider.TIME();
 
@@ -265,7 +263,8 @@ export class LeaseHandler extends BaseHandler {
     return this.bidi(
       ctx,
       {
-        history: this.history$(this.getTenant(ctx)),
+        // history: this.history$(this.getTenant(ctx)),
+        history: NEVER, // No history for keepAlive
         requests,
       },
       {
@@ -282,12 +281,7 @@ export class LeaseHandler extends BaseHandler {
           );
         },
         historyToResponse: (tenant, connectionId, requestId, signal) => {
-          return this.mapHistoryToResponse(
-            tenant,
-            connectionId,
-            requestId,
-            signal
-          );
+          return () => NEVER;
         },
         errorToResponse: (tenant, connectionId, requestId, signal) => {
           return this.mapErrorToResponse(
@@ -366,68 +360,6 @@ export class LeaseHandler extends BaseHandler {
                 requestId,
                 request: source,
                 response: keepAlive,
-                signal,
-              };
-              return response;
-            })
-          )
-          .subscribe({
-            next(response) {
-              subscriber.next(response);
-            },
-            error(err) {
-              subscriber.error(err);
-            },
-            complete() {
-              subscriber.complete();
-            },
-          });
-
-        return () => {
-          subscription.unsubscribe();
-        };
-      });
-    };
-  }
-
-  mapHistoryToResponse(
-    tenant: string,
-    connectionId: string,
-    requestId: string,
-    signal: AbortSignal
-  ): OperatorFunction<
-    TenantHistory<AbsoluteLease>[],
-    StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
-  > {
-    return (
-      source: Observable<TenantHistory<AbsoluteLease>[]>
-    ): Observable<
-      StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
-    > => {
-      return new Observable<
-        StreamResponse<LeaseKeepAliveRequest, LeaseKeepAliveResponse>
-      >((subscriber) => {
-        const subscription = source
-          .pipe(
-            mergeAll(),
-            filter((h) => h.tenant === tenant && h.action === "DELETE"),
-            map((history) => {
-              const response: StreamResponse<
-                LeaseKeepAliveRequest,
-                LeaseKeepAliveResponse
-              > = {
-                tenant: tenant,
-                connectionId,
-                requestId,
-                request: {
-                  $typeName: "etcdserverpb.LeaseKeepAliveRequest",
-                  ID: BigInt(history.current.ID),
-                },
-                response: {
-                  $typeName: "etcdserverpb.LeaseKeepAliveResponse",
-                  ID: BigInt(history.current.ID),
-                  TTL: BigInt(0),
-                },
                 signal,
               };
               return response;

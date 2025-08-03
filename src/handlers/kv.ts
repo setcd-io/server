@@ -16,7 +16,17 @@ import { TenantKVTable } from "../storage/kv";
 import { BaseHandler } from "./base";
 import Context from "../context";
 import { deserialize, serialize } from "../storage/serde";
-import { Subject } from "rxjs";
+import {
+  concatAll,
+  concatMap,
+  filter,
+  from,
+  map,
+  NEVER,
+  Subject,
+  switchMap,
+  tap,
+} from "rxjs";
 import { DynamoDBRecord, DynamoDBStreamEvent } from "aws-lambda";
 import { FastifyReply, FastifyRequest } from "fastify";
 import { ErrGRPCCompacted, ErrGRPCKeyNotFound } from "../util/error";
@@ -31,8 +41,50 @@ export class KVHandler extends BaseHandler {
   constructor(ctx: Context, leaseHandler: LeaseHandler) {
     super(ctx);
     this.kv = new TenantKVTable(ctx, leaseHandler);
+
+    // const leases = leaseHandler.leases
+    //   .pipe(
+    //     filter((l) => l.action === "DELETE"),
+    //     tap((l) => {
+    //       console.log("!!! observing lease deletion", {
+    //         tenant: l.tenant,
+    //         leaseId: l.current.ID,
+    //       });
+    //     }),
+    //     concatMap((l) =>
+    //       from(ctx.currentRevision(l.tenant)).pipe(
+    //         switchMap((revision) =>
+    //           this.kv.range(
+    //             l.tenant,
+    //             {
+    //               $typeName: "etcdserverpb.RangeRequest",
+    //               key: new Uint8Array(1),
+    //               rangeEnd: new Uint8Array(1),
+    //               maxModRevision: BigInt(revision),
+    //             },
+    //             {
+    //               leaseId: Number(l.current.ID),
+    //               handler: (kv) =>
+    //                 this.kv.deleteKey(
+    //                   l.tenant,
+    //                   deserialize(kv.key, true),
+    //                   kv.modRevision
+    //                 ),
+    //             }
+    //           )
+    //         )
+    //       )
+    //     )
+    //   )
+    //   .subscribe();
+
+    ctx.signal.addEventListener("abort", () => {
+      // leases.unsubscribe();
+      this.records.complete();
+    });
   }
 
+  // TODO: Replace this by putting an HTTP server in CloudRx
   public dynamodbHandler() {
     return async (req: FastifyRequest, reply: FastifyReply) => {
       if (req.host !== "dynamodb.amazonaws.com") {
