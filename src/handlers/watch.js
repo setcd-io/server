@@ -229,11 +229,12 @@ class WatchHandler extends base_1.BaseHandler {
                     }
                     const progressNotify = (0, rxjs_1.interval)(1000).pipe((0, rxjs_1.map)(() => this.watches
                         .get(res.tenant)
-                        ?.get(Number(res.response.watchId))), (0, rxjs_1.takeWhile)((watch) => !!watch && watch.progressNotify, false), (0, rxjs_1.map)(() => {
+                        ?.get(Number(res.response.watchId))), (0, rxjs_1.takeWhile)((watch) => !!watch, false), (0, rxjs_1.map)(() => {
                         const response = lodash_1.default.cloneDeep(res);
                         response.response.created = false;
                         response.response.canceled = false;
                         response.response.events = [];
+                        console.log("!!! progress notify response", response);
                         return response;
                     }));
                     // Emit immediate response first, then start interval asynchronously
