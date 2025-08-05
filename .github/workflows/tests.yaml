@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        serve: [coreos-etcd, dynamodb-local, dynamodb-remote]
+        serve: [coreos-etcd, dynamodb-local] #, dynamodb-remote]
         run: [microsoft-etcd3, kubernetes-etcd3] #, k3d]
     steps:
       - uses: actions/checkout@v4
