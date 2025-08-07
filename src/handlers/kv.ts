@@ -33,6 +33,7 @@ import { ErrGRPCCompacted, ErrGRPCKeyNotFound } from "../util/error";
 import chalk from "chalk";
 import { KeyValue } from "@setcd-io/connectrpc-etcd";
 import { LeaseHandler } from "./lease";
+import { log } from "../util/log";
 
 export class KVHandler extends BaseHandler {
   private records = new Subject<DynamoDBRecord>();
@@ -56,7 +57,6 @@ export class KVHandler extends BaseHandler {
         return;
       }
       const { Records } = req.body as DynamoDBStreamEvent;
-      // console.log(`Received ${Records.length} records`);
       Records.forEach((record) => {
         this.records.next(record);
       });
@@ -238,16 +238,14 @@ export class KVHandler extends BaseHandler {
 
     const revision = await this.ctx.minRevision(tenant, Number(req.revision));
 
-    console.log("Compacted", {
+    log("Compacted", {
+      level: "success",
       tenant,
-      revision,
+      action: "Compact",
+      context: {
+        revision: Number(revision),
+      },
     });
-
-    // console.log(`Compacted ${deleted.prevKvs.length} keys`, {
-    //   tenant,
-    //   keys: deleted.prevKvs.map((kv) => serialize(kv.key, "utf8", true)),
-    //   minRevision: await this.ctx.minRevision(tenant, Number(req.revision)),
-    // });
 
     return {
       $typeName: "etcdserverpb.CompactionResponse",
@@ -338,7 +336,12 @@ export class KVHandler extends BaseHandler {
             };
           })
           .catch((e) => {
-            console.warn(chalk.red("kv txn compare error"), e.message);
+            log("KV Transaction Compare Error", {
+              level: "error",
+              tenant,
+              action: "Txn",
+              output: e.message,
+            });
             return { success: false };
           });
       });
@@ -360,7 +363,12 @@ export class KVHandler extends BaseHandler {
                 return acc;
               })
               .catch((e) => {
-                console.warn("kv txn put error", e.message);
+                log("KV Transaction Put Error", {
+                  level: "error",
+                  tenant,
+                  action: "Txn",
+                  output: e.message,
+                });
                 acc.succeeded = false;
                 return acc;
               });
@@ -374,7 +382,12 @@ export class KVHandler extends BaseHandler {
                 return acc;
               })
               .catch((e) => {
-                console.warn("kv txn range error", e.message);
+                log("KV Transaction Range Error", {
+                  level: "error",
+                  tenant,
+                  action: "Txn",
+                  output: e.message,
+                });
                 acc.succeeded = false;
                 return acc;
               });
@@ -388,7 +401,12 @@ export class KVHandler extends BaseHandler {
                 return acc;
               })
               .catch((e) => {
-                console.warn("kv txn delete error", e.message);
+                log("KV Transaction DeleteRange Error", {
+                  level: "error",
+                  tenant,
+                  action: "Txn",
+                  output: e.message,
+                });
                 acc.succeeded = false;
                 return acc;
               });
@@ -403,7 +421,12 @@ export class KVHandler extends BaseHandler {
                 return acc;
               })
               .catch((e) => {
-                console.warn("kv txn txn error", e.message);
+                log("KV Transaction Error", {
+                  level: "error",
+                  tenant,
+                  action: "Txn",
+                  output: e.message,
+                });
                 acc.succeeded = false;
                 return acc;
               });

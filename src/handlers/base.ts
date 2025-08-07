@@ -133,7 +133,7 @@ export abstract class BaseHandler {
         .pipe(
           catchError((err) => {
             log("Stream error", {
-              level: "info",
+              level: "warn",
               tenant,
               action: "Bidi",
               output: err.message,
@@ -145,7 +145,7 @@ export abstract class BaseHandler {
         .subscribe({
           complete: () => {
             log("Stream completed", {
-              level: "info",
+              level: "success",
               tenant,
               action: "Bidi",
               context: { con: connectionId },
@@ -205,7 +205,7 @@ export abstract class BaseHandler {
               },
               complete: () => {
                 log("Request completed", {
-                  level: "info",
+                  level: "success",
                   tenant,
                   action: "Bidi",
                   context: { con: connectionId, req: requestId },
@@ -238,7 +238,7 @@ export abstract class BaseHandler {
               },
               complete: () => {
                 log("History completed", {
-                  level: "info",
+                  level: "success",
                   tenant,
                   action: "Bidi",
                   context: { con: connectionId, req: requestId },
@@ -273,7 +273,7 @@ export abstract class BaseHandler {
               },
               complete: () => {
                 log("Error mapping completed", {
-                  level: "info",
+                  level: "success",
                   tenant,
                   action: "Bidi",
                   context: { con: connectionId, req: requestId },
@@ -285,7 +285,7 @@ export abstract class BaseHandler {
     })()
       .catch((err) => {
         log("Requests Error", {
-          level: "info",
+          level: "warn",
           tenant,
           action: "Bidi",
           output: err.message,
@@ -297,7 +297,7 @@ export abstract class BaseHandler {
       })
       .finally(() => {
         log("Requests Complete", {
-          level: "info",
+          level: "success",
           tenant,
           action: "Bidi",
           context: { con: connectionId },
@@ -325,7 +325,7 @@ export abstract class BaseHandler {
       });
     } finally {
       log("Responses Complete", {
-        level: "info",
+        level: "success",
         tenant,
         action: "Bidi",
         context: { con: connectionId },

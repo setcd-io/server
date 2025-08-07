@@ -322,21 +322,6 @@ class Context
     console.log(`${name} v${version}`);
   }
 
-  // async status(): Promise<void> {
-  //   const client = new Etcd3({
-  //     hosts: ["https://127.0.0.1:2379"],
-  //     credentials: {
-  //       rootCertificate: await this.certfile(),
-  //       certChain: await this.certfile(),
-  //       privateKey: await this.keyfile(),
-  //     },
-  //   });
-
-  //   const status = await client.maintenance.status();
-
-  //   console.table(status);
-  // }
-
   async certfile(): Promise<Buffer> {
     return readFileSync(
       process.env.CERTDIR && process.env.CERTFILE

@@ -427,7 +427,7 @@ export class WatchHandler extends BaseHandler {
                       .map((watch) => ({ watch, history }));
 
                     log(history.current, {
-                      level: "info",
+                      level: "success",
                       tenant,
                       action: "Watcher",
                       output: `${watchers.map(

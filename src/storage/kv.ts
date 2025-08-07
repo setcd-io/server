@@ -99,7 +99,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     );
     this.history.on("expired", (h) => {
       log(h.current, {
-        level: "info",
+        level: "success",
         tenant: h.tenant,
         action: "KeyVaue Expired",
         context: {
@@ -127,7 +127,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       ),
       tap((h) => {
         log(h.previous, {
-          level: "info",
+          level: "success",
           action: "KeyValueHistory",
           tenant: h.tenant,
           output: h.current,
@@ -285,9 +285,15 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       });
 
       if (!previous) {
-        console.debug(chalk.yellow("Key already deleted"), {
-          pk: table.pk(),
-          sk: table.sk(key),
+        log("Key not found", {
+          level: "warn",
+          tenant,
+          action: "Delete",
+          context: {
+            pk: table.pk(),
+            sk: table.sk(key),
+          },
+          output: "Key not found",
         });
         return undefined;
       }
@@ -313,10 +319,15 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       if (e instanceof Error && e.name === "ConditionalCheckFailedException") {
         return undefined;
       }
-      console.warn("Unable to delete key", {
-        pk: table.pk(),
-        sk: table.sk(key),
-        message: e.message,
+      log("Unable to delete key", {
+        level: "error",
+        tenant,
+        action: "Delete",
+        context: {
+          pk: table.pk(),
+          sk: table.sk(key),
+        },
+        output: e.message,
       });
       throw e;
     }

@@ -123,6 +123,11 @@ export const log = (
     context,
   }: Options = { level: "info", tenant: DEFAULT_TENANT }
 ): void => {
+  const verbose = process.env.SETCD_VERBOSE === "true";
+  if (!verbose && level !== "error") {
+    return;
+  }
+
   const severityColor =
     level === "error"
       ? chalk.red
