@@ -85,6 +85,28 @@ export class LeaseHandler extends BaseHandler {
       hashFn: (value) => `${value.tenant}:${value.ID}`,
     });
     this.leases = this._leases.pipe(mapLease(), share());
+
+    this._leases.on("expired", (lease) => {
+      log("Expired", {
+        level: "info",
+        tenant: lease.tenant,
+        action: "Lease",
+        output: lease,
+      });
+    });
+    const subscription = this._leases.subscribe((lease) => {
+      log("Updated", {
+        level: "info",
+        tenant: lease.tenant,
+        action: "Lease",
+        output: lease,
+      });
+    });
+
+    ctx.on("abort", () => {
+      subscription.unsubscribe();
+      this._leases.complete();
+    });
   }
 
   async grant(
@@ -261,6 +283,7 @@ export class LeaseHandler extends BaseHandler {
     requests: AsyncIterable<LeaseKeepAliveRequest>
   ): AsyncGenerator<LeaseKeepAliveResponse, void, unknown> {
     return this.bidi(
+      "LeaseKeepAlive",
       ctx,
       {
         // history: this.history$(this.getTenant(ctx)),

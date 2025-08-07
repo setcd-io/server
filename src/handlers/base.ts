@@ -84,6 +84,7 @@ export abstract class BaseHandler {
   }
 
   public async *bidi<Req, Res, T>(
+    name: string,
     ctx: HandlerContext,
     sources: {
       requests: AsyncIterable<Req>;
@@ -124,6 +125,14 @@ export abstract class BaseHandler {
     const abort = new AbortController();
     const tenant = this.getTenant(ctx);
     const connectionId = this.getConnectionId(ctx);
+    const requestIds: string[] = [];
+
+    log("Stream Start", {
+      level: "info",
+      tenant,
+      action: name,
+      context: { con: connectionId },
+    });
 
     const responses = new Subject<StreamResponse<Req, Res>>();
     const subscriptions: Subscription[] = [];
@@ -155,32 +164,40 @@ export abstract class BaseHandler {
     );
 
     ctx.signal.addEventListener("abort", () => {
-      log("Context aborted", {
+      log("Context Abort", {
         level: "warn",
         tenant,
-        action: "Bidi",
-        context: { con: connectionId },
+        action: name,
+        context: { con: connectionId, reqs: requestIds },
       });
       abort.abort(ctx.signal.reason);
     });
 
     abort.signal.addEventListener("abort", () => {
-      log("Stream aborted", {
+      log("Stream Abort", {
         level: "warn",
         tenant,
-        action: "Bidi",
-        context: { con: connectionId },
+        action: name,
+        context: { con: connectionId, reqs: requestIds },
       });
       responses.error(abort.signal.reason);
     });
 
     (async () => {
       for await (const request of sources.requests) {
-        if (abort.signal.aborted) {
-          return;
-        }
-
         const requestId = nanoid(8);
+        requestIds.push(requestId);
+        log("Request Start", {
+          level: "info",
+          tenant,
+          action: name,
+          output: request,
+          context: { con: connectionId, req: requestId },
+        });
+
+        if (abort.signal.aborted) {
+          break;
+        }
 
         subscriptions.push(
           of(request)
@@ -297,10 +314,10 @@ export abstract class BaseHandler {
       })
       .finally(() => {
         log("Requests Complete", {
-          level: "success",
+          level: "info",
           tenant,
-          action: "Bidi",
-          context: { con: connectionId },
+          action: name,
+          context: { con: connectionId, reqs: requestIds },
         });
         responses.error(new Error("Requests Complete"));
       });
@@ -323,14 +340,23 @@ export abstract class BaseHandler {
         output: err.message,
         context: { con: connectionId },
       });
-    } finally {
-      log("Responses Complete", {
-        level: "success",
-        tenant,
-        action: "Bidi",
-        context: { con: connectionId },
-      });
-      subscriptions.forEach((sub) => sub.unsubscribe());
     }
+    // finally {
+    //   log("Responses Complete", {
+    //     level: "info",
+    //     tenant,
+    //     action: name,
+    //     context: { con: connectionId, reqs: requestIds },
+    //   });
+    // }
+
+    log("Stream Complete", {
+      level: "info",
+      tenant,
+      action: name,
+      context: { con: connectionId, reqs: requestIds },
+    });
+
+    subscriptions.forEach((sub) => sub.unsubscribe());
   }
 }

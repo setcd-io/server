@@ -98,10 +98,11 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       ctx.historyStorage
     );
     this.history.on("expired", (h) => {
-      log(h.current, {
-        level: "success",
+      log("Expired", {
+        level: "info",
         tenant: h.tenant,
-        action: "KeyVaue Expired",
+        action: "KeyValue",
+        output: h.current,
         context: {
           action: h.action,
         },

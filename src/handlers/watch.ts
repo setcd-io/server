@@ -157,6 +157,7 @@ export class WatchHandler extends BaseHandler {
     requests: AsyncIterable<WatchRequest>
   ): AsyncGenerator<WatchResponse, void, unknown> {
     return this.bidi(
+      "Watch",
       ctx,
       {
         requests,

@@ -10,7 +10,7 @@ import chalk from "chalk";
 import { CONNECTION_ID, DEFAULT_TENANT, TENANT } from "./const";
 
 export const stringify = (
-  message: Message<string> | ConnectError
+  message: Message<string> | Awaited<unknown> | ConnectError
 ): { revision?: number; message?: string } => {
   if (message instanceof ConnectError) {
     return { message: message.message };
@@ -109,12 +109,12 @@ type Options = {
   level: Level;
   tenant: string;
   action?: string;
-  output?: string | Message<string> | ConnectError;
+  output?: string | Message<string> | Awaited<unknown> | ConnectError;
   context?: Context;
 };
 
 export const log = (
-  message?: string | Message<string>,
+  message?: string | Message<string> | Awaited<unknown>,
   {
     level = "info",
     tenant = DEFAULT_TENANT,
@@ -124,7 +124,7 @@ export const log = (
   }: Options = { level: "info", tenant: DEFAULT_TENANT }
 ): void => {
   const verbose = process.env.SETCD_VERBOSE === "true";
-  if (!verbose && level !== "error") {
+  if (!verbose && level !== "error" && level !== "info") {
     return;
   }
 
