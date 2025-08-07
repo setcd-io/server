@@ -201,7 +201,7 @@ export class WatchHandler extends BaseHandler {
         },
       },
       {
-        response: async (tenant, connectionId, res) => {
+        onResponse: async (tenant, connectionId, res) => {
           res = _.cloneDeep(res);
           res.response.header = await this.header(tenant);
 
@@ -246,6 +246,13 @@ export class WatchHandler extends BaseHandler {
           }
 
           return res;
+        },
+        onEnd: async (tenant, connectionId) => {
+          Array.from(this.watches.get(tenant)?.values() || []).forEach((w) => {
+            if (w.connectionId === connectionId) {
+              this.watches.get(tenant)?.delete(Number(w.watchId));
+            }
+          });
         },
       }
     );

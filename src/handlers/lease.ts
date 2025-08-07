@@ -283,7 +283,7 @@ export class LeaseHandler extends BaseHandler {
     requests: AsyncIterable<LeaseKeepAliveRequest>
   ): AsyncGenerator<LeaseKeepAliveResponse, void, unknown> {
     return this.bidi(
-      "LeaseKeepAlive",
+      "Lease",
       ctx,
       {
         // history: this.history$(this.getTenant(ctx)),
@@ -316,11 +316,12 @@ export class LeaseHandler extends BaseHandler {
         },
       },
       {
-        response: async (tenant, connectionId, res) => {
+        onResponse: async (tenant, connectionId, res) => {
           res = _.cloneDeep(res);
           res.response.header = await this.header(tenant);
           return res;
         },
+        onEnd: async (tenant, connectionId) => {},
       }
     );
   }

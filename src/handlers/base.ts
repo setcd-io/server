@@ -114,12 +114,13 @@ export abstract class BaseHandler {
         signal: AbortSignal
       ) => OperatorFunction<Error, StreamResponse<Req, Res>>;
     },
-    mutators: {
-      response: (
+    handlers: {
+      onResponse: (
         tenant: string,
         connectionId: string,
         res: StreamResponse<Req, Res>
       ) => Promise<StreamResponse<Req, Res>>;
+      onEnd: (tenant: string, connectionId: string) => Promise<void>;
     }
   ): AsyncGenerator<Res, void, unknown> {
     const abort = new AbortController();
@@ -127,40 +128,64 @@ export abstract class BaseHandler {
     const connectionId = this.getConnectionId(ctx);
     const requestIds: string[] = [];
 
-    log("Stream Start", {
+    log("Start", {
       level: "info",
       tenant,
       action: name,
       context: { con: connectionId },
     });
 
+    const requests = from(sources.requests).pipe(observeOn(asyncScheduler));
     const responses = new Subject<StreamResponse<Req, Res>>();
     const subscriptions: Subscription[] = [];
 
     subscriptions.push(
-      responses
+      requests
         .pipe(
-          catchError((err) => {
-            log("Stream error", {
-              level: "warn",
-              tenant,
-              action: "Bidi",
-              output: err.message,
-              context: { con: connectionId },
-            });
-            return EMPTY;
+          mergeMap((request) => {
+            const requestId = nanoid(8);
+            requestIds.push(requestId);
+
+            subscriptions.push(
+              sources.history
+                .pipe(map((his) => his.filter(filters.history)))
+                .pipe(
+                  mappers.historyToResponse(
+                    tenant,
+                    connectionId,
+                    requestId,
+                    abort.signal
+                  )
+                )
+                .subscribe(responses)
+            );
+
+            subscriptions.push(
+              responses
+                .pipe(
+                  ignoreElements(),
+                  catchError((err) => of(err)),
+                  mappers.errorToResponse(
+                    tenant,
+                    connectionId,
+                    requestId,
+                    abort.signal
+                  )
+                )
+                .subscribe(responses)
+            );
+
+            return of(request).pipe(
+              mappers.requestToResponse(
+                tenant,
+                connectionId,
+                requestId,
+                abort.signal
+              )
+            );
           })
         )
-        .subscribe({
-          complete: () => {
-            log("Stream completed", {
-              level: "success",
-              tenant,
-              action: "Bidi",
-              context: { con: connectionId },
-            });
-          },
-        })
+        .subscribe(responses)
     );
 
     ctx.signal.addEventListener("abort", () => {
@@ -174,189 +199,35 @@ export abstract class BaseHandler {
     });
 
     abort.signal.addEventListener("abort", () => {
-      log("Stream Abort", {
-        level: "warn",
-        tenant,
-        action: name,
-        context: { con: connectionId, reqs: requestIds },
-      });
-      responses.error(abort.signal.reason);
-    });
-
-    (async () => {
-      for await (const request of sources.requests) {
-        const requestId = nanoid(8);
-        requestIds.push(requestId);
-        log("Request Start", {
-          level: "info",
-          tenant,
-          action: name,
-          output: request,
-          context: { con: connectionId, req: requestId },
-        });
-
-        if (abort.signal.aborted) {
-          break;
-        }
-
-        subscriptions.push(
-          of(request)
-            .pipe(
-              mappers.requestToResponse(
-                tenant,
-                connectionId,
-                requestId,
-                abort.signal
-              )
-            )
-            .subscribe({
-              next: (res) => responses.next(res),
-              error: (err) => {
-                log("Unable to map request", {
-                  level: "warn",
-                  tenant,
-                  action: "Bidi",
-                  output: err.message,
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-              complete: () => {
-                log("Request completed", {
-                  level: "success",
-                  tenant,
-                  action: "Bidi",
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-            })
-        );
-
-        subscriptions.push(
-          sources.history
-            .pipe(map((his) => his.filter(filters.history)))
-            .pipe(
-              mappers.historyToResponse(
-                tenant,
-                connectionId,
-                requestId,
-                abort.signal
-              )
-            )
-            .subscribe({
-              next: (response) => responses.next(response),
-              error: (err) => {
-                log("Unable to map history", {
-                  level: "warn",
-                  tenant,
-                  action: "Bidi",
-                  output: err.message,
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-              complete: () => {
-                log("History completed", {
-                  level: "success",
-                  tenant,
-                  action: "Bidi",
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-            })
-        );
-
-        subscriptions.push(
-          responses
-            .pipe(
-              ignoreElements(),
-              catchError((err) => of(err)),
-              mappers.errorToResponse(
-                tenant,
-                connectionId,
-                requestId,
-                abort.signal
-              )
-            )
-            .subscribe({
-              next: (response) => {
-                responses.next(response);
-              },
-              error: () => {
-                log("Unable to map error", {
-                  level: "warn",
-                  tenant,
-                  action: "Bidi",
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-              complete: () => {
-                log("Error mapping completed", {
-                  level: "success",
-                  tenant,
-                  action: "Bidi",
-                  context: { con: connectionId, req: requestId },
-                });
-              },
-            })
-        );
+      if (abort.signal.reason.name === "AbortError") {
+        responses.complete();
+      } else {
+        responses.error(abort.signal.reason);
       }
-    })()
-      .catch((err) => {
-        log("Requests Error", {
-          level: "warn",
-          tenant,
-          action: "Bidi",
-          output: err.message,
-          context: {
-            con: connectionId,
-          },
-        });
-        responses.error(err);
-      })
-      .finally(() => {
-        log("Requests Complete", {
-          level: "info",
-          tenant,
-          action: name,
-          context: { con: connectionId, reqs: requestIds },
-        });
-        responses.error(new Error("Requests Complete"));
-      });
+    });
 
     try {
       for await (const response of AsyncObservable.from(
         responses.pipe(
           filter((req) => req.tenant === tenant),
           filter((res) => filters.response(res)),
-          concatMap((res) => mutators.response(tenant, connectionId, res))
+          concatMap((res) => handlers.onResponse(tenant, connectionId, res))
         )
       )) {
         yield response.response;
       }
     } catch (err) {
-      log("Responses Error", {
-        level: "warn",
+      abort.abort(err);
+    } finally {
+      await handlers.onEnd(tenant, connectionId);
+      subscriptions.forEach((sub) => sub.unsubscribe());
+      log("End", {
+        level: "info",
         tenant,
-        action: "Bidi",
-        output: err.message,
-        context: { con: connectionId },
+        action: name,
+        output: abort.signal.reason,
+        context: { con: connectionId, reqs: requestIds },
       });
     }
-    // finally {
-    //   log("Responses Complete", {
-    //     level: "info",
-    //     tenant,
-    //     action: name,
-    //     context: { con: connectionId, reqs: requestIds },
-    //   });
-    // }
-
-    log("Stream Complete", {
-      level: "info",
-      tenant,
-      action: name,
-      context: { con: connectionId, reqs: requestIds },
-    });
-
-    subscriptions.forEach((sub) => sub.unsubscribe());
   }
 }
