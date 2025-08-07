@@ -149,7 +149,13 @@ export class WatchHandler extends BaseHandler {
       ]);
     }
 
-    console.log(table.toString());
+    log("Watches", {
+      level: "success",
+      tenant: "all",
+      action: "Stats",
+      output: `\n${table.toString()}`,
+    });
+    // console.log(table.toString());
   }
 
   public watch(

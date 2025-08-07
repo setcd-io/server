@@ -95,18 +95,6 @@ async function main(ctx: Context) {
   const maintenance = new MaintenanceHandler(ctx);
   const cluster = new ClusterHandler(ctx);
 
-  const kvStorage = await ctx.kvStorage;
-  const revisionStorage = await ctx.revisionStorage;
-  const historyStorage = await firstValueFrom(ctx.historyStorage);
-  const leaseStorage = await firstValueFrom(ctx.leaseStorage);
-
-  console.table({
-    "KV Table": kvStorage.tableArn,
-    "Revision Table": revisionStorage.tableArn,
-    "History Table": historyStorage.tableArn,
-    "Lease Table": leaseStorage.tableArn,
-  });
-
   const routes = createRouter({ auth, kv, lease, watch, maintenance, cluster });
 
   await server.register(fastifyConnectPlugin, {
