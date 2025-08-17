@@ -4,7 +4,7 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
-    image: golang:1.21
+    image: golang:1.24
     network_mode: host
     volumes:
       - ./.cache/kubernetes-etcd3:/test

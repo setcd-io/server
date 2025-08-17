@@ -1,4 +1,4 @@
-KUBE_VERSION ?= 1.29.0
+KUBE_VERSION ?= 1.33.0
 CACHEDIR ?= .cache
 SERVE ?= dynamodb-local
 RUN ?= microsoft-etcd3
