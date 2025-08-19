@@ -110,8 +110,7 @@ export class KVHandler extends BaseHandler {
 
   async range(
     tenant: string,
-    req: Partial<RangeRequest>,
-    options?: { includeExpired?: boolean }
+    req: Partial<RangeRequest>
   ): Promise<RangeResponse> {
     if (req.revision && req.revision > 0n) {
       const minRevision = await this.ctx.minRevision(tenant);
@@ -128,17 +127,26 @@ export class KVHandler extends BaseHandler {
     }
 
     const { count, kvs, more } = await this.kv.range(tenant, req, {
-      includeExpired: options?.includeExpired,
+      // A specific revision was requested, include expired keys so the handler below can filter them
+      includeExpired: req.revision !== 0n,
       handler: async (kv) => {
         const { revision } = req;
         if (!revision || revision === 0n) return kv;
 
-        if (kv.modRevision > Number(revision)) {
-          const snapshot = await this.kv.latest(
+        if (BigInt(kv.modRevision) > revision) {
+          // Sanity check, we really got a current version that is newer than the requested revision
+          // - Go back in time and see what the value was at the revision
+          log("WARN: Expensive Snapshot Usage", {
+            level: "error",
             tenant,
-            kv.key,
-            Number(revision)
-          );
+            action: "Range",
+            context: {
+              key: kv.key,
+              revision: Number(revision),
+            },
+          });
+
+          const snapshot = await this.kv.atRevision(tenant, kv.key, revision);
 
           if (snapshot) {
             return {
@@ -152,10 +160,17 @@ export class KVHandler extends BaseHandler {
           }
         }
 
-        if (kv.modRevision <= Number(revision)) {
+        // If the version is 0, the key was deleted, exclude it from the results
+        if (kv.version === 0) {
+          return undefined;
+        }
+
+        // The key is valid at the requested revision, return it
+        if (BigInt(kv.modRevision) <= revision) {
           return kv;
         }
 
+        // There is no valid key at the requested revision, return undefined
         return undefined;
       },
     });

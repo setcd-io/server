@@ -12,6 +12,8 @@ services:
       dockerfile: Dockerfile
       # Use the JS Build for local execution
       target: full
+    environment:
+      - SETCD_VERBOSE=false
     healthcheck:
       test:
         [
