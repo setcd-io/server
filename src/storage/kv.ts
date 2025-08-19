@@ -16,6 +16,7 @@ import {
   filter,
   firstValueFrom,
   from,
+  lastValueFrom,
   map,
   Observable,
   observeOn,
@@ -531,49 +532,38 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     return items || [];
   }
 
-  async latest(
+  async atRevision(
     tenant: string,
     key: Uint8Array | string,
-    revision?: number
+    revision: number | bigint
   ): Promise<TenantHistory<KeyValue> | undefined> {
     if (key instanceof Uint8Array) {
       key = serialize(key, "utf8", true);
     }
 
-    // Gather all pages
-    const pages = this.history
-      .snapshot()
-      .pipe(map((h) => h.filter((h) => h.tenant === tenant)));
-
-    // Flatten the pages and filter by key
-    const all = pages.pipe(
-      concatAll(),
-      filter((h) => serialize(h.current.key, "utf8", true) === key),
-      observeOn(asyncScheduler),
-      share()
-    );
-
-    // If no revision is specified, return the latest history event
-    if (!revision) {
-      return firstValueFrom(
-        all.pipe(
-          // IDK if i need this
-          // filter(
-          //   (h) => h.current.modRevision === BigInt(h.current.createRevision)
-          // ),
-          toArray(),
-          map((histories) => histories.slice(-1)[0])
+    const all = await lastValueFrom(
+      this.history.snapshot().pipe(
+        map((h) =>
+          h.filter(
+            // TODO: add these exact match filters to the snapshot() method
+            // TODO: add key to top-level TenantHistory
+            (h) =>
+              h.tenant === tenant &&
+              serialize(h.current.key, "utf8", true) === key
+          )
         )
-      );
-    }
-
-    // If a revision is specified, return the history event with that revision
-    return firstValueFrom(
-      all.pipe(
-        filter((h) => BigInt(h.current.modRevision) === BigInt(revision)),
-        toArray(),
-        map((histories) => histories[0])
       )
     );
+
+    const history = all
+      .filter((h) => BigInt(h.current.modRevision) <= BigInt(revision))
+      .sort((a, b) => {
+        // Sort by modRevision descending
+        return Number(
+          BigInt(b.current.modRevision) - BigInt(a.current.modRevision)
+        );
+      });
+
+    return history[0];
   }
 }
