@@ -84,8 +84,8 @@ const HISTORY_SIZE = HISTORY_TIMEOUT / 10;
 
 export type TenantHistory<T> = {
   tenant: string;
-  key: string;
   action: "PUT" | "DELETE";
+  key: string;
   current: T;
   previous?: T;
 };
@@ -208,6 +208,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
           {
             tenant,
             action: "PUT",
+            key: serialize(key, "utf8", true),
             current: intoKv(current),
             previous: intoKv(previous),
           },
@@ -246,7 +247,8 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       this.history.next(
         {
           tenant,
-          action: "PUT" as const,
+          action: "PUT",
+          key: serialize(key, "utf8", true),
           current: intoKv(current),
         },
         current.expires
@@ -313,6 +315,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       this.history.next({
         tenant,
         action: "DELETE",
+        key: serialize(key, "utf8", true),
         current: intoKv(current),
         previous: intoKv(previous),
       });
