@@ -26,6 +26,7 @@ import {
   lastValueFrom,
   takeUntil,
   fromEvent,
+  mergeMap,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
@@ -108,17 +109,11 @@ export class WatchHandler extends BaseHandler {
         `${watch.tenant}:${watch.watchId}:${watch.connectionId}:${watch.requestId}`,
     });
 
-    const sub = this._watches.subscribe((watch) => {
-      console.log("!!! watch sub", watch);
-    });
-
     this._watches.on("expired", (watch) => {
-      console.log("!!! Watch expired:", watch);
       this._aborts[watch.watchId]?.abort(new ErrGRPCWatchCanceled());
     });
 
     ctx.on("abort", () => {
-      sub.unsubscribe();
       // watches.unsubscribe();
       // Object.values(this._aborts).forEach((abort) => {
       //   abort.abort(new ErrGRPCWatchCanceled());
@@ -490,7 +485,7 @@ export class WatchHandler extends BaseHandler {
                   )
               ),
               filter(({ watch, histories }) => {
-                if (histories.length === 0 && !watch.spec?.progressNotify) {
+                if (histories.length === 0 || !watch.spec?.progressNotify) {
                   return false;
                 }
                 return true;
