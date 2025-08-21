@@ -87,7 +87,7 @@ export abstract class BaseHandler {
     name: string,
     ctx: HandlerContext,
     sources: {
-      requests: AsyncIterable<Req>;
+      requests: Observable<Req>;
       history: Observable<TenantHistory<T>[]>;
     },
     filters: {
@@ -135,7 +135,7 @@ export abstract class BaseHandler {
       context: { con: connectionId },
     });
 
-    const requests = from(sources.requests).pipe(observeOn(asyncScheduler));
+    const requests = sources.requests.pipe(observeOn(asyncScheduler));
     const responses = new Subject<StreamResponse<Req, Res>>();
     const subscriptions: Subscription[] = [];
 

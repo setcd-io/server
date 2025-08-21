@@ -28,21 +28,26 @@ import {
   toArray,
   concat,
   tap,
+  concatAll,
+  lastValueFrom,
+  mergeAll,
+  takeUntil,
+  fromEvent,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
-import Table from "cli-table3";
-import util from "util";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
 import { log, stringify } from "../util/log";
+import { CloudProvider, CloudReplaySubject } from "cloudrx";
 
-type Watch = WatchCreateRequest & {
+type Watch = {
   tenant: string;
+  watchId: number;
   connectionId: string;
   requestId: string;
-  createdAt: Date;
   cancelReason?: string;
+  spec?: WatchCreateRequest;
 };
 
 type Stats = {
@@ -53,40 +58,40 @@ type Stats = {
   };
 };
 
-const isWatched = (watch: Watch, requestId: string, kv?: KeyValue): boolean => {
-  if (watch.requestId !== requestId) {
-    return false;
-  }
-
+const isWatched = (watch: Watch, kv?: KeyValue): boolean => {
   const key = serialize(kv?.key, "utf8", false);
   if (!key) {
     return false;
   }
 
-  const startKey = serialize(watch.key, "utf8", true);
+  if (!watch.spec) {
+    return false;
+  }
 
-  if (watch.rangeEnd.length === 0 && key === startKey) {
+  const startKey = serialize(watch.spec.key, "utf8", true);
+
+  if (watch.spec.rangeEnd.length === 0 && key === startKey) {
     // Exact match
     return true;
   }
 
   if (
-    watch.rangeEnd.length === 1 &&
-    watch.rangeEnd[0] === 0 &&
+    watch.spec.rangeEnd.length === 1 &&
+    watch.spec.rangeEnd[0] === 0 &&
     key.startsWith(startKey)
   ) {
     return true;
   }
 
   if (
-    watch.key.length === watch.rangeEnd.length &&
-    watch.key.slice(-1)[0] + 1 === watch.rangeEnd.slice(-1)[0] &&
+    watch.spec.key.length === watch.spec.rangeEnd.length &&
+    watch.spec.key.slice(-1)[0] + 1 === watch.spec.rangeEnd.slice(-1)[0] &&
     key.startsWith(startKey)
   ) {
     return true;
   }
 
-  const endKey = serialize(watch.rangeEnd, "utf8", true);
+  const endKey = serialize(watch.spec.rangeEnd, "utf8", true);
   if (key.localeCompare(startKey) >= 0 && key.localeCompare(endKey) < 0) {
     return true;
   }
@@ -95,79 +100,102 @@ const isWatched = (watch: Watch, requestId: string, kv?: KeyValue): boolean => {
 };
 
 export class WatchHandler extends BaseHandler {
-  private watches: Map<string, Map<number, Watch>> = new Map();
+  private _watches: CloudReplaySubject<Watch>;
+  private _aborts: Record<number, AbortController> = {};
+  // private watches: Map<string, Map<number, Watch>> = new Map();
 
   constructor(ctx: Context, private kv: KVHandler) {
     super(ctx);
-  }
-
-  public stats() {
-    const _stats = Array.from(this.watches.entries()).reduce(
-      (acc, [tenant, watches]) => {
-        const watchIds = Array.from(watches.keys()).map((id) => id.toString());
-        const connectionIds = Array.from(watches.values())
-          .map((watch) => watch.connectionId)
-          .filter((id) => !!id);
-        acc[tenant] = {
-          watchIds,
-          connectionIds: Array.from(new Set(connectionIds)),
-          age: Math.max(
-            ...Array.from(watches.values()).map((watch) => {
-              const createdAt = watch.createdAt.getTime();
-              const now = new Date().getTime();
-              return Math.floor((now - createdAt) / 1000);
-            })
-          ),
-        };
-        return acc;
-      },
-      {} as Stats
-    );
-
-    let table = new Table({ style: { head: [], border: [] } });
-    table.push(["Tenant", "Connection IDs", "Watch IDs", "Age (s)"]);
-
-    Object.entries(_stats).forEach(([tenant, stats]) => {
-      if (!stats.watchIds.length || !stats.connectionIds.length) {
-        return;
-      }
-      table.push([
-        tenant,
-        util.format(stats.connectionIds),
-        util.format(stats.watchIds),
-        util.format(stats.age),
-      ]);
+    this._watches = new CloudReplaySubject<Watch>(ctx.watchStorage, {
+      hashFn: (watch: Watch) =>
+        `${watch.tenant}:${watch.watchId}:${watch.connectionId}:${watch.requestId}`,
     });
 
-    if (table.length === 1) {
-      table.push([
-        {
-          colSpan: 4,
-          content: "No active watches",
-          vAlign: "center",
-        },
-      ]);
-    }
-
-    log("Watches", {
-      level: "success",
-      tenant: "all",
-      action: "Stats",
-      output: `\n${table.toString()}`,
+    this._watches.on("expired", (watch) => {
+      this._aborts[watch.watchId]?.abort(new ErrGRPCWatchCanceled());
     });
-    // console.log(table.toString());
+
+    ctx.on("abort", () => {
+      // watches.unsubscribe();
+      // Object.values(this._aborts).forEach((abort) => {
+      //   abort.abort(new ErrGRPCWatchCanceled());
+      // });
+      // this._aborts = {};
+      // this._watches.complete();
+    });
   }
+
+  // public stats() {
+  //   const _stats = Array.from(this.watches.entries()).reduce(
+  //     (acc, [tenant, watches]) => {
+  //       const watchIds = Array.from(watches.keys()).map((id) => id.toString());
+  //       const connectionIds = Array.from(watches.values())
+  //         .map((watch) => watch.connectionId)
+  //         .filter((id) => !!id);
+  //       acc[tenant] = {
+  //         watchIds,
+  //         connectionIds: Array.from(new Set(connectionIds)),
+  //         age: Math.max(
+  //           ...Array.from(watches.values()).map((watch) => {
+  //             const createdAt = watch.createdAt.getTime();
+  //             const now = new Date().getTime();
+  //             return Math.floor((now - createdAt) / 1000);
+  //           })
+  //         ),
+  //       };
+  //       return acc;
+  //     },
+  //     {} as Stats
+  //   );
+
+  //   let table = new Table({ style: { head: [], border: [] } });
+  //   table.push(["Tenant", "Connection IDs", "Watch IDs", "Age (s)"]);
+
+  //   Object.entries(_stats).forEach(([tenant, stats]) => {
+  //     if (!stats.watchIds.length || !stats.connectionIds.length) {
+  //       return;
+  //     }
+  //     table.push([
+  //       tenant,
+  //       util.format(stats.connectionIds),
+  //       util.format(stats.watchIds),
+  //       util.format(stats.age),
+  //     ]);
+  //   });
+
+  //   if (table.length === 1) {
+  //     table.push([
+  //       {
+  //         colSpan: 4,
+  //         content: "No active watches",
+  //         vAlign: "center",
+  //       },
+  //     ]);
+  //   }
+
+  //   log("Watches", {
+  //     level: "success",
+  //     tenant: "all",
+  //     action: "Stats",
+  //     output: `\n${table.toString()}`,
+  //   });
+  //   // console.log(table.toString());
+  // }
 
   public watch(
     ctx: HandlerContext,
     requests: AsyncIterable<WatchRequest>
   ): AsyncGenerator<WatchResponse, void, unknown> {
+    const abort = new AbortController();
+    const abortEvent = fromEvent(abort.signal, "abort");
     return this.bidi(
       "Watch",
       ctx,
       {
-        requests,
-        history: this.kv.kv.history$(this.getTenant(ctx)),
+        requests: from(requests).pipe(takeUntil(abortEvent)),
+        history: this.kv.kv
+          .history$(this.getTenant(ctx))
+          .pipe(takeUntil(abortEvent)),
       },
       {
         history: (his) => {
@@ -220,45 +248,43 @@ export class WatchHandler extends BaseHandler {
             throw new ErrGRPCCompacted();
           }
 
-          this.watches.set(tenant, this.watches.get(tenant) || new Map());
-
-          let watch = this.watches
-            .get(tenant)
-            ?.get(Number(res.response.watchId));
-
-          if (!watch && res.request.requestUnion.case === "createRequest") {
-            watch = {
-              ..._.cloneDeep(res.request.requestUnion.value),
-              tenant,
-              connectionId,
-              requestId: res.requestId,
-              watchId: res.response.watchId,
-              createdAt: new Date(),
-              progressNotify: false,
-              prevKv: false,
-            };
-          }
-
-          if (!watch) {
-            throw new ErrGRPCWatchCanceled();
-          }
+          const watch: Watch = {
+            tenant,
+            watchId: Number(res.response.watchId),
+            connectionId,
+            requestId: res.requestId,
+          };
 
           if (res.request.requestUnion.case === "createRequest") {
-            this.watches.get(tenant)?.set(Number(res.response.watchId), watch);
+            this._aborts[watch.watchId] = abort;
+            this._watches.next(
+              {
+                ...watch,
+                spec: res.request.requestUnion.value,
+              },
+              CloudProvider.TIME() + 60
+            );
           }
 
           if (res.request.requestUnion.case === "cancelRequest") {
-            this.watches.get(tenant)?.delete(Number(res.response.watchId));
+            this._watches.next(
+              {
+                ...watch,
+                cancelReason: res.response.cancelReason,
+              },
+              CloudProvider.TIME()
+            );
           }
 
           return res;
         },
         onEnd: async (tenant, connectionId) => {
-          Array.from(this.watches.get(tenant)?.values() || []).forEach((w) => {
-            if (w.connectionId === connectionId) {
-              this.watches.get(tenant)?.delete(Number(w.watchId));
-            }
-          });
+          await lastValueFrom(
+            this._watches.snapshot({ tenant, connectionId }).pipe(
+              concatAll(),
+              tap((w) => this._watches.next(w, CloudProvider.TIME()))
+            )
+          );
         },
       }
     );
@@ -281,7 +307,6 @@ export class WatchHandler extends BaseHandler {
           const subscription = source
             .pipe(
               concatMap((source) => {
-                this.watches.set(tenant, this.watches.get(tenant) || new Map());
                 switch (source.requestUnion.case) {
                   case "createRequest":
                     return combineLatest([
@@ -300,12 +325,13 @@ export class WatchHandler extends BaseHandler {
                           fragment: false,
                         };
 
-                        if (
-                          source.requestUnion.case === "createRequest" &&
-                          source.requestUnion.value.startRevision === 0n
-                        ) {
-                          source.requestUnion.value.startRevision =
-                            BigInt(currentRevision);
+                        if (source.requestUnion.case === "createRequest") {
+                          source.requestUnion.value.watchId = BigInt(watchId);
+
+                          if (source.requestUnion.value.startRevision === 0n) {
+                            source.requestUnion.value.startRevision =
+                              BigInt(currentRevision);
+                          }
                         }
 
                         return {
@@ -319,17 +345,17 @@ export class WatchHandler extends BaseHandler {
                       })
                     );
                   case "cancelRequest":
-                    return of(
-                      this.watches
-                        .get(tenant)
-                        ?.get(Number(source.requestUnion.value.watchId))
-                    )
-                      .pipe(filter((watch) => !!watch))
+                    return this._watches
+                      .snapshot({
+                        tenant,
+                        watchId: Number(source.requestUnion.value.watchId),
+                      })
                       .pipe(
+                        concatAll(),
                         map((watch) => {
                           const response: WatchResponse = {
                             $typeName: "etcdserverpb.WatchResponse",
-                            watchId: watch.watchId,
+                            watchId: BigInt(watch.watchId),
                             compactRevision: 0n,
                             events: [],
                             canceled: true,
@@ -340,6 +366,12 @@ export class WatchHandler extends BaseHandler {
                             created: false,
                             fragment: false,
                           };
+
+                          if (source.requestUnion.case === "cancelRequest") {
+                            source.requestUnion.value.watchId = BigInt(
+                              watch.watchId
+                            );
+                          }
 
                           return {
                             tenant,
@@ -373,18 +405,28 @@ export class WatchHandler extends BaseHandler {
                 }
 
                 const progressNotify = interval(1000).pipe(
-                  map(() =>
-                    this.watches
-                      .get(res.tenant)
-                      ?.get(Number(res.response.watchId))
+                  switchMap(() =>
+                    this._watches.snapshot({
+                      tenant,
+                      watchId: Number(res.response.watchId),
+                    })
                   ),
-                  takeWhile((watch) => !!watch, false),
+                  concatAll(),
                   map(() => {
-                    const response = _.cloneDeep(res);
-                    response.response.created = false;
-                    response.response.canceled = false;
-                    response.response.events = [];
-                    return response;
+                    const cloned = _.cloneDeep(res);
+                    cloned.request = {
+                      $typeName: "etcdserverpb.WatchRequest",
+                      requestUnion: {
+                        case: "progressRequest",
+                        value: {
+                          $typeName: "etcdserverpb.WatchProgressRequest",
+                        },
+                      },
+                    };
+                    cloned.response.created = false;
+                    cloned.response.canceled = false;
+                    cloned.response.events = [];
+                    return cloned;
                   })
                 );
 
@@ -429,106 +471,64 @@ export class WatchHandler extends BaseHandler {
           const subscription = source
             .pipe(
               mergeMap((histories) =>
-                from(histories).pipe(
-                  filter((his) => his.tenant === tenant),
-                  mergeMap((history) => {
-                    const watchers = [
-                      ...(this.watches.get(tenant)?.values() || []),
-                    ]
-                      .filter((watch) =>
-                        isWatched(watch, requestId, history.current)
-                      )
-                      .map((watch) => ({ watch, history }));
-
-                    log(history.current, {
-                      level: "success",
-                      tenant,
-                      action: "Watcher",
-                      output: `${watchers.map(
-                        (w) => stringify(w.watch).message
-                      )}`,
-                      context: {
-                        con: connectionId,
-                        req: requestId,
+                this._watches
+                  .snapshot({ tenant, connectionId, requestId })
+                  .pipe(
+                    mergeAll(),
+                    map((watch) => ({
+                      watch,
+                      histories: histories.filter(
+                        (h) =>
+                          h.tenant === tenant && isWatched(watch, h.current)
+                      ),
+                    }))
+                  )
+              ),
+              filter(({ watch, histories }) => {
+                if (histories.length === 0 && !watch.spec?.progressNotify) {
+                  return false;
+                }
+                return true;
+              }),
+              map(({ watch, histories }) => {
+                const response: StreamResponse<WatchRequest, WatchResponse> = {
+                  tenant,
+                  connectionId,
+                  requestId,
+                  signal,
+                  request: {
+                    $typeName: "etcdserverpb.WatchRequest",
+                    requestUnion: {
+                      case: "progressRequest",
+                      value: {
+                        $typeName: "etcdserverpb.WatchProgressRequest",
                       },
-                    });
+                    },
+                  },
+                  response: {
+                    $typeName: "etcdserverpb.WatchResponse",
+                    watchId: BigInt(watch.watchId),
+                    compactRevision: 0n,
+                    events: histories.map((history) => {
+                      return {
+                        $typeName: "mvccpb.Event",
+                        type:
+                          history.action === "PUT"
+                            ? Event_EventType.PUT
+                            : Event_EventType.DELETE,
+                        kv: history.current,
+                        prevKv: history.previous,
+                      };
+                    }),
+                    canceled: false,
+                    cancelReason: "",
+                    created: false,
+                    fragment: false,
+                  },
+                };
 
-                    return from(watchers);
-                  }),
-                  groupBy((x) => x.watch.watchId),
-                  mergeMap((group$) =>
-                    group$.pipe(
-                      map((x) => x.history),
-                      toArray(),
-                      map((histories) => {
-                        const watch = this.watches
-                          .get(tenant)
-                          ?.get(Number(group$.key));
-
-                        return {
-                          watchId: group$.key,
-                          watch,
-                          histories: histories.filter((history) => {
-                            // if (!watch?.prevKv) {
-                            //   delete history.previous;
-                            // }
-
-                            return (
-                              history.current.modRevision >=
-                              watch?.startRevision!
-                            );
-                          }),
-                        };
-                      })
-                    )
-                  ),
-                  filter(({ watch, histories }) => {
-                    return !!histories.length || !!watch?.progressNotify;
-                  }),
-                  map(({ watchId, histories }) => {
-                    const response: StreamResponse<
-                      WatchRequest,
-                      WatchResponse
-                    > = {
-                      tenant,
-                      connectionId,
-                      requestId,
-                      signal,
-                      request: {
-                        $typeName: "etcdserverpb.WatchRequest",
-                        requestUnion: {
-                          case: "progressRequest",
-                          value: {
-                            $typeName: "etcdserverpb.WatchProgressRequest",
-                          },
-                        },
-                      },
-                      response: {
-                        $typeName: "etcdserverpb.WatchResponse",
-                        watchId: BigInt(watchId),
-                        compactRevision: 0n,
-                        events: histories.map((history) => {
-                          return {
-                            $typeName: "mvccpb.Event",
-                            type:
-                              history.action === "PUT"
-                                ? Event_EventType.PUT
-                                : Event_EventType.DELETE,
-                            kv: history.current,
-                            prevKv: history.previous,
-                          };
-                        }),
-                        canceled: false,
-                        cancelReason: "",
-                        created: false,
-                        fragment: false,
-                      },
-                    };
-
-                    return response;
-                  })
-                )
-              )
+                return response;
+              })
             )
             .subscribe({
               next(response) {
@@ -563,36 +563,44 @@ export class WatchHandler extends BaseHandler {
         (subscriber) => {
           const subscription = source
             .pipe(
-              concatMap((source) => {
-                return from(
-                  Array.from(this.watches.get(tenant)?.values() || []).map(
-                    (watch) => {
-                      return {
-                        ..._.cloneDeep(watch),
-                        cancelReason: source.message,
-                      };
-                    }
+              mergeMap((error) =>
+                this._watches
+                  .snapshot({ tenant, connectionId, requestId })
+                  .pipe(
+                    mergeAll(),
+                    map((watch) => ({ watch, error }))
                   )
-                );
-              }),
-              filter(
-                (watch) =>
-                  watch.tenant === tenant && watch.connectionId === connectionId
               ),
-              map((watch) => {
-                const request: WatchRequest = {
-                  $typeName: "etcdserverpb.WatchRequest",
-                  requestUnion: {
-                    case: "cancelRequest",
-                    value: {
-                      $typeName: "etcdserverpb.WatchCancelRequest",
-                      watchId: watch.watchId,
+              map(({ watch, error }) => {
+                const response: StreamResponse<WatchRequest, WatchResponse> = {
+                  tenant,
+                  connectionId,
+                  requestId,
+                  signal,
+                  request: {
+                    $typeName: "etcdserverpb.WatchRequest",
+                    requestUnion: {
+                      case: "cancelRequest",
+                      value: {
+                        $typeName: "etcdserverpb.WatchCancelRequest",
+                        watchId: BigInt(watch.watchId),
+                      },
                     },
                   },
+                  response: {
+                    $typeName: "etcdserverpb.WatchResponse",
+                    watchId: BigInt(watch.watchId),
+                    compactRevision: 0n, // TODO: Probably need to observe minRevision
+                    events: [],
+                    canceled: true,
+                    cancelReason: error.message,
+                    created: false,
+                    fragment: false,
+                  },
                 };
-                return request;
-              }),
-              this.mapRequestToResponse(tenant, connectionId, requestId, signal)
+
+                return response;
+              })
             )
             .subscribe({
               next(response) {

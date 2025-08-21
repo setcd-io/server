@@ -13,7 +13,7 @@ services:
       # Use the JS Build for local execution
       target: full
     environment:
-      - SETCD_VERBOSE=false
+      - SETCD_VERBOSE=true
     healthcheck:
       test:
         [

@@ -288,7 +288,7 @@ export class LeaseHandler extends BaseHandler {
       {
         // history: this.history$(this.getTenant(ctx)),
         history: NEVER, // No history for keepAlive
-        requests,
+        requests: from(requests),
       },
       {
         history: (his) => his.tenant === this.getTenant(ctx),

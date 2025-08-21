@@ -52,6 +52,7 @@ class Context
   private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   public readonly leaseStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   public readonly historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  public readonly watchStorage: Observable<DynamoDBImpl<"pk", "sk">>;
 
   // TODO: Introduce a PersistentCounter Subject
   private revisions?: RevisionTable;
@@ -66,7 +67,7 @@ class Context
       rangeKey: "sk",
     });
 
-    this._revisionStorage = DynamoDB.from("rev", {
+    this._revisionStorage = DynamoDB.from("revision", {
       hashKey: "pk",
       rangeKey: "sk",
     });
@@ -76,7 +77,12 @@ class Context
       rangeKey: "sk",
     });
 
-    this.historyStorage = DynamoDB.from("his", {
+    this.historyStorage = DynamoDB.from("history", {
+      hashKey: "pk",
+      rangeKey: "sk",
+    });
+
+    this.watchStorage = DynamoDB.from("watch", {
       hashKey: "pk",
       rangeKey: "sk",
     });
