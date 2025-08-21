@@ -10,27 +10,20 @@ import {
 import { BaseHandler, StreamResponse } from "./base";
 import { KVHandler } from "./kv";
 import {
-  asyncScheduler,
   combineLatest,
   concatMap,
-  delay,
   filter,
   from,
-  groupBy,
   interval,
   map,
-  mergeMap,
   Observable,
   of,
   OperatorFunction,
   switchMap,
-  takeWhile,
-  toArray,
   concat,
   tap,
   concatAll,
   lastValueFrom,
-  mergeAll,
   takeUntil,
   fromEvent,
 } from "rxjs";
@@ -65,6 +58,10 @@ const isWatched = (watch: Watch, kv?: KeyValue): boolean => {
   }
 
   if (!watch.spec) {
+    return false;
+  }
+
+  if (Number(kv?.modRevision) < Number(watch.spec.startRevision)) {
     return false;
   }
 
@@ -470,11 +467,11 @@ export class WatchHandler extends BaseHandler {
         (subscriber) => {
           const subscription = source
             .pipe(
-              mergeMap((histories) =>
+              concatMap((histories) =>
                 this._watches
                   .snapshot({ tenant, connectionId, requestId })
                   .pipe(
-                    mergeAll(),
+                    concatAll(),
                     map((watch) => ({
                       watch,
                       histories: histories.filter(
@@ -563,11 +560,11 @@ export class WatchHandler extends BaseHandler {
         (subscriber) => {
           const subscription = source
             .pipe(
-              mergeMap((error) =>
+              concatMap((error) =>
                 this._watches
                   .snapshot({ tenant, connectionId, requestId })
                   .pipe(
-                    mergeAll(),
+                    concatAll(),
                     map((watch) => ({ watch, error }))
                   )
               ),
