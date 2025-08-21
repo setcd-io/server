@@ -14,7 +14,7 @@ import {
 } from "rxjs";
 import Context from "../context";
 import { serialize } from "./serde";
-import { Item } from "ddb-table/lib/DocumentClient";
+import DynamoDBDocument, { Item } from "ddb-table/lib/DocumentClient";
 import { DynamoDB } from "cloudrx";
 import { DynamoDBImpl } from "cloudrx/dist/providers/aws/provider";
 

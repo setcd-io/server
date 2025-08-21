@@ -142,12 +142,14 @@ export abstract class BaseHandler {
     subscriptions.push(
       requests
         .pipe(
+          observeOn(asyncScheduler),
           mergeMap((request) => {
             const requestId = nanoid(8);
             requestIds.push(requestId);
 
             subscriptions.push(
               sources.history
+                .pipe(observeOn(asyncScheduler))
                 .pipe(map((his) => his.filter(filters.history)))
                 .pipe(
                   mappers.historyToResponse(
@@ -163,6 +165,7 @@ export abstract class BaseHandler {
             subscriptions.push(
               responses
                 .pipe(
+                  observeOn(asyncScheduler),
                   ignoreElements(),
                   catchError((err) => of(err)),
                   mappers.errorToResponse(
@@ -209,6 +212,7 @@ export abstract class BaseHandler {
     try {
       for await (const response of AsyncObservable.from(
         responses.pipe(
+          observeOn(asyncScheduler),
           filter((req) => req.tenant === tenant),
           filter((res) => filters.response(res)),
           concatMap((res) => handlers.onResponse(tenant, connectionId, res))

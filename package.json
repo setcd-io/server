@@ -23,8 +23,8 @@
   "license": "SEE LICENSE IN LICENSE.md",
   "description": "",
   "devDependencies": {
-    "@aws-sdk/client-dynamodb": "^3.840.0",
-    "@aws-sdk/lib-dynamodb": "3.x",
+    "@aws-sdk/client-dynamodb": "^3.872.0",
+    "@aws-sdk/lib-dynamodb": "^3.872.0",
     "@bufbuild/protobuf": "^2.2.0",
     "@connectrpc/connect": "^2.0.0",
     "@connectrpc/connect-fastify": "^2.0.0",

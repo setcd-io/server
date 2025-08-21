@@ -26,13 +26,11 @@ import {
   lastValueFrom,
   takeUntil,
   fromEvent,
-  mergeMap,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
 import _ from "lodash";
 import { TenantHistory } from "../storage/kv";
-import { log, stringify } from "../util/log";
 import { CloudProvider, CloudReplaySubject } from "cloudrx";
 
 type Watch = {
