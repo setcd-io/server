@@ -134,18 +134,6 @@ export class KVHandler extends BaseHandler {
         if (!revision || revision === 0n) return kv;
 
         if (BigInt(kv.modRevision) > revision) {
-          // Sanity check, we really got a current version that is newer than the requested revision
-          // - Go back in time and see what the value was at the revision
-          log("WARN: Expensive Snapshot Usage", {
-            level: "error",
-            tenant,
-            action: "Range",
-            context: {
-              key: kv.key,
-              revision: Number(revision),
-            },
-          });
-
           const snapshot = await this.kv.atRevision(tenant, kv.key, revision);
 
           if (snapshot) {
