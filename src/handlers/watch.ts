@@ -19,7 +19,6 @@ import {
   groupBy,
   interval,
   map,
-  mergeMap,
   Observable,
   of,
   OperatorFunction,
@@ -428,10 +427,10 @@ export class WatchHandler extends BaseHandler {
         (subscriber) => {
           const subscription = source
             .pipe(
-              mergeMap((histories) =>
+              concatMap((histories) =>
                 from(histories).pipe(
                   filter((his) => his.tenant === tenant),
-                  mergeMap((history) => {
+                  concatMap((history) => {
                     const watchers = [
                       ...(this.watches.get(tenant)?.values() || []),
                     ]
@@ -456,7 +455,7 @@ export class WatchHandler extends BaseHandler {
                     return from(watchers);
                   }),
                   groupBy((x) => x.watch.watchId),
-                  mergeMap((group$) =>
+                  concatMap((group$) =>
                     group$.pipe(
                       map((x) => x.history),
                       toArray(),

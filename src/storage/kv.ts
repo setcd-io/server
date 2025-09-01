@@ -84,6 +84,7 @@ const HISTORY_SIZE = HISTORY_TIMEOUT / 10;
 
 export type TenantHistory<T> = {
   tenant: string;
+  key: string;
   action: "PUT" | "DELETE";
   current: T;
   previous?: T;
@@ -206,6 +207,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
         this.history.next(
           {
             tenant,
+            key: current.key,
             action: "PUT",
             current: intoKv(current),
             previous: intoKv(previous),
@@ -245,6 +247,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       this.history.next(
         {
           tenant,
+          key: current.key,
           action: "PUT" as const,
           current: intoKv(current),
         },
@@ -311,6 +314,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
 
       this.history.next({
         tenant,
+        key: current.key,
         action: "DELETE",
         current: intoKv(current),
         previous: intoKv(previous),
@@ -541,19 +545,7 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
       key = serialize(key, "utf8", true);
     }
 
-    const all = await lastValueFrom(
-      this.history.snapshot().pipe(
-        map((h) =>
-          h.filter(
-            // TODO: add these exact match filters to the snapshot() method
-            // TODO: add key to top-level TenantHistory
-            (h) =>
-              h.tenant === tenant &&
-              serialize(h.current.key, "utf8", true) === key
-          )
-        )
-      )
-    );
+    const all = await lastValueFrom(this.history.snapshot({ tenant, key }));
 
     const history = all
       .filter((h) => BigInt(h.current.modRevision) <= BigInt(revision))

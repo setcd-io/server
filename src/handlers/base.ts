@@ -12,7 +12,6 @@ import {
   fromEvent,
   ignoreElements,
   map,
-  mergeMap,
   MonoTypeOperatorFunction,
   NEVER,
   Observable,
@@ -142,7 +141,7 @@ export abstract class BaseHandler {
     subscriptions.push(
       requests
         .pipe(
-          mergeMap((request) => {
+          concatMap((request) => {
             const requestId = nanoid(8);
             requestIds.push(requestId);
 

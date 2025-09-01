@@ -1,4 +1,4 @@
-KUBE_VERSION ?= 1.29.0
+KUBE_VERSION ?= 1.33.0
 CACHEDIR ?= .cache
 SERVE ?= dynamodb-local
 RUN ?= microsoft-etcd3
@@ -82,7 +82,7 @@ _test-microsoft-etcd3: _test
 
 ### Kubernetes etcd3 Tests ###
 _checkout-kubernetes-etcd3: _checkout
-	@git clone https://github.com/kubernetes/kubernetes.git -b v$(KUBE_VERSION) $(CACHEDIR)/$(RUN) || true
+	@git clone https://github.com/kubernetes/kubernetes.git -b v$(KUBE_VERSION) $(CACHEDIR)/$(RUN) --depth 1 || true
 
 _patch-kubernetes-etcd3: _patch
 	$(eval WHAT := $(if $(strip $(WHAT)), $(WHAT), ".*"))
