@@ -26,6 +26,9 @@ import {
   lastValueFrom,
   takeUntil,
   fromEvent,
+  shareReplay,
+  observeOn,
+  asyncScheduler,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
@@ -483,10 +486,13 @@ export class WatchHandler extends BaseHandler {
                   )
               ),
               filter(({ watch, histories }) => {
-                if (histories.length === 0 || !watch.spec?.progressNotify) {
-                  return false;
+                if (histories.length) {
+                  return true;
                 }
-                return true;
+                if (!histories.length && watch.spec?.progressNotify) {
+                  return true;
+                }
+                return false;
               }),
               map(({ watch, histories }) => {
                 const response: StreamResponse<WatchRequest, WatchResponse> = {

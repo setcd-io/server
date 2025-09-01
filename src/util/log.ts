@@ -177,7 +177,9 @@ export const log = (
   }, {} as Record<string, string>);
 
   console.log(
-    `${symbol} [${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
+    `${symbol} [${chalk.dim(
+      Date.now()
+    )}][${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
   );
 };
 

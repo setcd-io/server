@@ -77,14 +77,12 @@ const mapLease = (): OperatorFunction<StoredLease, RelativeLease> => {
 
 export class LeaseHandler extends BaseHandler {
   private _leases: CloudReplaySubject<StoredLease>;
-  public readonly leases: Observable<RelativeLease>;
 
   constructor(ctx: Context) {
     super(ctx);
     this._leases = new CloudReplaySubject<StoredLease>(ctx.leaseStorage, {
       hashFn: (value) => `${value.tenant}:${value.ID}`,
     });
-    this.leases = this._leases.pipe(mapLease(), share());
 
     this._leases.on("expired", (lease) => {
       log("Expired", {

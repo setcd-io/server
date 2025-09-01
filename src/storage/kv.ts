@@ -109,9 +109,12 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
           action: h.action,
         },
       });
-      queueMicrotask(() =>
+      asyncScheduler.schedule(() =>
         this.deleteKey(h.tenant, h.current.key, Number(h.current.modRevision))
       );
+      // queueMicrotask(() =>
+      //   this.deleteKey(h.tenant, h.current.key, Number(h.current.modRevision))
+      // );
     });
 
     ctx.on("abort", () => {

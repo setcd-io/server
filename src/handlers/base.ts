@@ -135,14 +135,13 @@ export abstract class BaseHandler {
       context: { con: connectionId },
     });
 
-    const requests = sources.requests.pipe(observeOn(asyncScheduler));
+    // const requests = sources.requests.pipe(observeOn(asyncScheduler));
     const responses = new Subject<StreamResponse<Req, Res>>();
     const subscriptions: Subscription[] = [];
 
     subscriptions.push(
-      requests
+      sources.requests
         .pipe(
-          observeOn(asyncScheduler),
           mergeMap((request) => {
             const requestId = nanoid(8);
             requestIds.push(requestId);
@@ -212,7 +211,6 @@ export abstract class BaseHandler {
     try {
       for await (const response of AsyncObservable.from(
         responses.pipe(
-          observeOn(asyncScheduler),
           filter((req) => req.tenant === tenant),
           filter((res) => filters.response(res)),
           concatMap((res) => handlers.onResponse(tenant, connectionId, res))
