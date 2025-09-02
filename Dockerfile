@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/usr/local/share/.cache \
     yarn
 
 RUN mkdir proto && cp /work/node_modules/etcd3/proto/* /work/proto/
-COPY --from=bitnami/etcd:3.5 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
+COPY --from=bitnami/etcd:3.5.21 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
 
 ENV CERTDIR=/work/src/certs
 ENV CERTFILE=localhost.crt
@@ -37,7 +37,7 @@ RUN ARCH=$(node -e "console.log(process.arch)") && \
     ./server --version
 
 FROM scratch
-COPY --from=bitnami/etcd:3.5 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
+COPY --from=bitnami/etcd:3.5.21 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
 COPY --from=arch /work/server /usr/bin/server
 COPY --from=full /work/src/certs/localhost.crt /etc/ssl/certs/localhost.crt
 COPY --from=full /work/src/certs/localhost.key /etc/ssl/private/localhost.key
