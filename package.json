@@ -88,5 +88,6 @@
       "build": "npm run build",
       "start": "node dist/server.js --no-http2"
     }
-  }
+  },
+  "dependencies": {}
 }

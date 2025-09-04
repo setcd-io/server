@@ -35,6 +35,9 @@ export class MaintenanceHandler extends BaseHandler {
       raftAppliedIndex: 0n,
       raftIndex: 0n,
       raftTerm: 0n,
+      dbSizeQuota: 0n,
+      storageVersion: "3.5.0",
+      downgradeInfo: undefined,
     };
 
     return resp;
