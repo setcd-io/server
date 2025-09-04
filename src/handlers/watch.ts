@@ -27,33 +27,35 @@ import {
   toArray,
   concat,
   tap,
+  Subject,
+  ReplaySubject,
+  Subscription,
+  fromEvent,
+  takeUntil,
+  startWith,
+  AsyncSubject,
+  merge,
+  mergeMap,
+  shareReplay,
+  bufferTime,
+  observeOn,
+  share,
+  EMPTY,
+  NEVER,
+  defer,
 } from "rxjs";
 import { serialize } from "../storage/serde";
 import { ErrGRPCCompacted, ErrGRPCWatchCanceled } from "../util/error";
 import Table from "cli-table3";
 import util from "util";
-import _ from "lodash";
+import _, { take } from "lodash";
 import { TenantHistory } from "../storage/kv";
 import { log, stringify } from "../util/log";
+import { AsyncObservable } from "../util/async";
+import { nanoid } from "nanoid";
 
-type Watch = WatchCreateRequest & {
-  tenant: string;
-  connectionId: string;
-  requestId: string;
-  createdAt: Date;
-  cancelReason?: string;
-};
-
-type Stats = {
-  [tenant: string]: {
-    watchIds: string[];
-    connectionIds: string[];
-    age: number;
-  };
-};
-
-const isWatched = (watch: Watch, requestId: string, kv?: KeyValue): boolean => {
-  if (watch.requestId !== requestId) {
+const isWatched = (watch: WatchCreateRequest, kv?: KeyValue): boolean => {
+  if (watch.startRevision !== 0n && kv?.modRevision! < watch.startRevision) {
     return false;
   }
 
@@ -93,523 +95,350 @@ const isWatched = (watch: Watch, requestId: string, kv?: KeyValue): boolean => {
   return false;
 };
 
+type Abortable<T> = T & { abort: (reason?: string) => void };
+
 export class WatchHandler extends BaseHandler {
-  private watches: Map<string, Map<number, Watch>> = new Map();
+  private _aborts: Map<string, AbortController> = new Map();
 
   constructor(ctx: Context, private kv: KVHandler) {
     super(ctx);
   }
 
-  public stats() {
-    const _stats = Array.from(this.watches.entries()).reduce(
-      (acc, [tenant, watches]) => {
-        const watchIds = Array.from(watches.keys()).map((id) => id.toString());
-        const connectionIds = Array.from(watches.values())
-          .map((watch) => watch.connectionId)
-          .filter((id) => !!id);
-        acc[tenant] = {
-          watchIds,
-          connectionIds: Array.from(new Set(connectionIds)),
-          age: Math.max(
-            ...Array.from(watches.values()).map((watch) => {
-              const createdAt = watch.createdAt.getTime();
-              const now = new Date().getTime();
-              return Math.floor((now - createdAt) / 1000);
-            })
-          ),
-        };
-        return acc;
-      },
-      {} as Stats
-    );
+  private getAbort(
+    ctx: HandlerContext,
+    tenant?: string,
+    connectionId?: string,
+    watchId?: number
+  ): AbortController {
+    const key = [tenant, connectionId, watchId].filter((v) => !!v).join(":");
 
-    let table = new Table({ style: { head: [], border: [] } });
-    table.push(["Tenant", "Connection IDs", "Watch IDs", "Age (s)"]);
-
-    Object.entries(_stats).forEach(([tenant, stats]) => {
-      if (!stats.watchIds.length || !stats.connectionIds.length) {
-        return;
-      }
-      table.push([
-        tenant,
-        util.format(stats.connectionIds),
-        util.format(stats.watchIds),
-        util.format(stats.age),
-      ]);
-    });
-
-    if (table.length === 1) {
-      table.push([
-        {
-          colSpan: 4,
-          content: "No active watches",
-          vAlign: "center",
-        },
-      ]);
+    if (this._aborts.has(key)) {
+      return this._aborts.get(key)!;
     }
 
-    log("Watches", {
-      level: "success",
-      tenant: "all",
-      action: "Stats",
-      output: `\n${table.toString()}`,
-    });
-    // console.log(table.toString());
+    const abort = this._aborts.set(key, new AbortController()).get(key)!;
+
+    if (tenant && connectionId && watchId) {
+      const parent = this.getAbort(ctx, tenant, connectionId);
+      parent.signal.addEventListener("abort", () => {
+        abort.abort(`Connection abort: ${parent.signal.reason}`);
+        this._aborts.delete(key);
+      });
+    } else if (tenant && connectionId) {
+      const parent = this.getAbort(ctx, tenant);
+      parent.signal.addEventListener("abort", () => {
+        abort.abort(`Tenant abort: ${parent.signal.reason}`);
+        this._aborts.delete(key);
+      });
+    } else if (tenant) {
+      const parent = this.getAbort(ctx);
+      parent.signal.addEventListener("abort", () => {
+        abort.abort(`Handler abort: ${parent.signal.reason}`);
+        this._aborts.delete(key);
+      });
+    } else {
+      ctx.signal.addEventListener("abort", () => {
+        abort.abort(`Context abort: ${ctx.signal.reason}`);
+        this._aborts.delete(key);
+      });
+    }
+
+    return abort;
   }
 
-  public watch(
+  public async *watch(
     ctx: HandlerContext,
-    requests: AsyncIterable<WatchRequest>
+    request: AsyncIterable<WatchRequest>
   ): AsyncGenerator<WatchResponse, void, unknown> {
-    return this.bidi(
-      "Watch",
-      ctx,
-      {
-        requests,
-        history: this.kv.kv.history$(this.getTenant(ctx)),
-      },
-      {
-        history: (his) => {
-          return his.tenant === this.getTenant(ctx);
-        },
-        response: (res) => {
-          return (
-            res.tenant === this.getTenant(ctx) &&
-            res.connectionId === this.getConnectionId(ctx)
-          );
-        },
-      },
-      {
-        requestToResponse: (tenant, connectionId, requestId, signal) => {
-          return this.mapRequestToResponse(
-            tenant,
-            connectionId,
-            requestId,
-            signal
-          );
-        },
-        historyToResponse: (tenant, connectionId, requestId, signal) => {
-          return this.mapHistoryToResponse(
-            tenant,
-            connectionId,
-            requestId,
-            signal
-          );
-        },
-        errorToResponse: (tenant, connectionId, requestId, signal) => {
-          return this.mapErrorToResponse(
-            tenant,
-            connectionId,
-            requestId,
-            signal
-          );
-        },
-      },
-      {
-        onResponse: async (tenant, connectionId, res) => {
-          res = _.cloneDeep(res);
-          res.response.header = await this.header(tenant);
-
-          if (
-            res.request.requestUnion.case === "createRequest" &&
-            res.request.requestUnion.value.startRevision !== 0n &&
-            res.request.requestUnion.value.startRevision <=
-              (await this.ctx.minRevision(res.tenant))
-          ) {
-            throw new ErrGRPCCompacted();
-          }
-
-          this.watches.set(tenant, this.watches.get(tenant) || new Map());
-
-          let watch = this.watches
-            .get(tenant)
-            ?.get(Number(res.response.watchId));
-
-          if (!watch && res.request.requestUnion.case === "createRequest") {
-            watch = {
-              ..._.cloneDeep(res.request.requestUnion.value),
-              tenant,
-              connectionId,
-              requestId: res.requestId,
-              watchId: res.response.watchId,
-              createdAt: new Date(),
-              progressNotify: false,
-              prevKv: false,
-            };
-          }
-
-          if (!watch) {
-            throw new ErrGRPCWatchCanceled();
-          }
-
-          if (res.request.requestUnion.case === "createRequest") {
-            this.watches.get(tenant)?.set(Number(res.response.watchId), watch);
-          }
-
-          if (res.request.requestUnion.case === "cancelRequest") {
-            this.watches.get(tenant)?.delete(Number(res.response.watchId));
-          }
-
-          return res;
-        },
-        onEnd: async (tenant, connectionId) => {
-          Array.from(this.watches.get(tenant)?.values() || []).forEach((w) => {
-            if (w.connectionId === connectionId) {
-              this.watches.get(tenant)?.delete(Number(w.watchId));
-            }
-          });
-        },
-      }
+    const tenant = this.getTenant(ctx);
+    const connectionId = this.getConnectionId(ctx);
+    const abort = this.getAbort(ctx, tenant, connectionId);
+    const requests = from(request).pipe(observeOn(asyncScheduler), share());
+    const history = this.kv.kv.history.pipe(
+      filter((his) => his.tenant === tenant),
+      bufferTime(1000, undefined, 10),
+      shareReplay()
     );
+
+    for await (const response of AsyncObservable.from(
+      requests.pipe(this.mapRequestToResponse(ctx, history))
+    )) {
+      response.header = await this.header(tenant);
+      yield response;
+
+      if (response.canceled) {
+        response.abort(`Watch ${response.watchId} canceled`);
+      }
+    }
+
+    abort.abort(`Connection ${connectionId} completed`);
   }
 
   mapRequestToResponse(
-    tenant: string,
-    connectionId: string,
-    requestId: string,
-    signal: AbortSignal
-  ): OperatorFunction<
-    WatchRequest,
-    StreamResponse<WatchRequest, WatchResponse>
-  > {
+    ctx: HandlerContext,
+    history: Observable<TenantHistory<KeyValue>[]>
+  ): OperatorFunction<WatchRequest, Abortable<WatchResponse>> {
+    const tenant = this.getTenant(ctx);
+    const connectionId = this.getConnectionId(ctx);
+
     return (
       source: Observable<WatchRequest>
-    ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
-      return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
-        (subscriber) => {
-          const subscription = source
-            .pipe(
-              concatMap((source) => {
-                this.watches.set(tenant, this.watches.get(tenant) || new Map());
-                switch (source.requestUnion.case) {
-                  case "createRequest":
-                    return combineLatest([
-                      this.ctx.nextWatch(tenant),
-                      this.ctx.currentRevision(tenant),
-                    ]).pipe(
-                      map(([watchId, currentRevision]) => {
-                        const response: WatchResponse = {
-                          $typeName: "etcdserverpb.WatchResponse",
-                          watchId: BigInt(watchId),
-                          compactRevision: 0n,
-                          events: [],
-                          canceled: false,
-                          cancelReason: "",
-                          created: true,
-                          fragment: false,
-                        };
+    ): Observable<Abortable<WatchResponse>> => {
+      return new Observable<Abortable<WatchResponse>>((subscriber) => {
+        const subscription = source
+          .pipe(
+            mergeMap((source) => {
+              const request = _.cloneDeep(source.requestUnion);
 
-                        if (
-                          source.requestUnion.case === "createRequest" &&
-                          source.requestUnion.value.startRevision === 0n
-                        ) {
-                          source.requestUnion.value.startRevision =
-                            BigInt(currentRevision);
-                        }
-
-                        return {
-                          tenant,
-                          connectionId,
-                          requestId,
-                          request: source,
-                          response,
-                          signal,
-                        } as StreamResponse<WatchRequest, WatchResponse>;
-                      })
+              if (!request.case || request.case === "cancelRequest") {
+                subscriber.next({
+                  $typeName: "etcdserverpb.WatchResponse",
+                  watchId: request.value?.watchId || 0n,
+                  compactRevision: 0n,
+                  events: [],
+                  canceled: true,
+                  cancelReason: request.case || "Invalid Request",
+                  created: false,
+                  fragment: false,
+                  abort: (reason) => {
+                    this.getAbort(
+                      ctx,
+                      tenant,
+                      connectionId,
+                      Number(request.value?.watchId)
+                    ).abort(
+                      `Watch ${request.value?.watchId} aborted: ${
+                        reason || request.case || "unknown reason"
+                      }`
                     );
-                  case "cancelRequest":
-                    return of(
-                      this.watches
-                        .get(tenant)
-                        ?.get(Number(source.requestUnion.value.watchId))
-                    )
-                      .pipe(filter((watch) => !!watch))
-                      .pipe(
-                        map((watch) => {
-                          const response: WatchResponse = {
-                            $typeName: "etcdserverpb.WatchResponse",
-                            watchId: watch.watchId,
-                            compactRevision: 0n,
-                            events: [],
-                            canceled: true,
-                            cancelReason:
-                              watch.cancelReason ||
-                              signal.reason?.message ||
-                              `User Requested Cancel`,
-                            created: false,
-                            fragment: false,
-                          };
+                  },
+                });
+                return NEVER;
+              }
 
-                          return {
-                            tenant,
-                            connectionId,
-                            requestId,
-                            request: source,
-                            response,
-                            signal,
-                          } as StreamResponse<WatchRequest, WatchResponse>;
-                        })
-                      );
-                  default:
-                    throw new Error(
-                      `Unimplemented watch case: ${source.requestUnion.case}`
-                    );
-                }
-              })
-            )
-            .pipe(
-              switchMap((res) => {
-                // Conditional fanout for progressNotify
-                res = _.cloneDeep(res);
+              if (request.case === "progressRequest") {
+                // NOT IMPLEMENTED -- where are we supposed to get watchId from?
+                return NEVER;
+              }
 
-                if (res.request.requestUnion.case !== "createRequest") {
-                  return of(res);
-                }
+              return combineLatest([
+                this.ctx.nextWatch(tenant),
+                this.ctx.currentRevision(tenant),
+              ]).pipe(
+                map(([watchId, currentRevision]) => {
+                  request.value.watchId = BigInt(watchId);
 
-                if (!res.request.requestUnion.value.progressNotify) {
-                  // No progress notify, don't set an interval
-                  return of(res);
-                }
+                  if (request.value.startRevision === 0n) {
+                    request.value.startRevision = BigInt(currentRevision);
+                  }
 
-                const progressNotify = interval(1000).pipe(
-                  map(() =>
-                    this.watches
-                      .get(res.tenant)
-                      ?.get(Number(res.response.watchId))
-                  ),
-                  takeWhile((watch) => !!watch, false),
-                  map(() => {
-                    const response = _.cloneDeep(res);
-                    response.response.created = false;
-                    response.response.canceled = false;
-                    response.response.events = [];
-                    return response;
-                  })
+                  const response: WatchResponse = {
+                    $typeName: "etcdserverpb.WatchResponse",
+                    watchId: BigInt(watchId),
+                    compactRevision: 0n,
+                    events: [],
+                    canceled: false,
+                    cancelReason: "",
+                    created: true,
+                    fragment: false,
+                  };
+
+                  return {
+                    request,
+                    response,
+                    abort: this.getAbort(ctx, tenant, connectionId, watchId),
+                  };
+                })
+              );
+            })
+          )
+          .pipe(
+            mergeMap(({ request, response, abort }) => {
+              // start with a nice hearty base of the initial response
+              let response$ = of(_.cloneDeep(response));
+
+              // sprinkle in history streaming
+              response$ = concat(
+                response$,
+                history.pipe(this.mapHistoryToResponse(tenant, request.value))
+              );
+
+              // sprinkle in progress notifications
+              if (request.value.progressNotify) {
+                response$ = merge(
+                  response$,
+                  interval(1000).pipe(
+                    map(() => {
+                      const res = _.cloneDeep(response);
+                      res.created = false;
+                      res.canceled = false;
+                      res.events = [];
+                      return res;
+                    })
+                  )
                 );
+              }
 
-                // Emit immediate response first, then start interval asynchronously
-                return concat(of(res), progressNotify);
-              })
-            )
-            .subscribe({
-              next(response) {
-                subscriber.next(response);
-              },
-              error(err) {
-                subscriber.error(err);
-              },
-              complete() {
-                subscriber.complete();
-              },
-            });
+              // out comes a delicious layer cake of abortable responses
+              return response$.pipe(
+                takeUntil(fromEvent(abort.signal, "abort")),
+                map((response) => {
+                  const abortable: Abortable<WatchResponse> = {
+                    ...response,
+                    abort: (reason) => {
+                      abort.abort(
+                        `Watch ${response.watchId} aborted: ${
+                          reason || "unknown reason"
+                        }`
+                      );
+                    },
+                  };
+                  return abortable;
+                })
+              );
+            })
+          )
+          .subscribe({
+            next(response) {
+              subscriber.next(response);
+            },
+            error(err) {
+              subscriber.error(err);
+            },
+            complete() {
+              subscriber.complete();
+            },
+          });
 
-          return () => {
-            subscription.unsubscribe();
-          };
-        }
-      );
+        return () => {
+          subscription.unsubscribe();
+        };
+      });
     };
   }
 
   mapHistoryToResponse(
     tenant: string,
-    connectionId: string,
-    requestId: string,
-    signal: AbortSignal
-  ): OperatorFunction<
-    TenantHistory<KeyValue>[],
-    StreamResponse<WatchRequest, WatchResponse>
-  > {
+    watch: WatchCreateRequest
+  ): OperatorFunction<TenantHistory<KeyValue>[], WatchResponse> {
     return (
       source: Observable<TenantHistory<KeyValue>[]>
-    ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
-      return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
-        (subscriber) => {
-          const subscription = source
-            .pipe(
-              concatMap((histories) =>
-                from(histories).pipe(
-                  filter((his) => his.tenant === tenant),
-                  concatMap((history) => {
-                    const watchers = [
-                      ...(this.watches.get(tenant)?.values() || []),
-                    ]
-                      .filter((watch) =>
-                        isWatched(watch, requestId, history.current)
-                      )
-                      .map((watch) => ({ watch, history }));
+    ): Observable<WatchResponse> => {
+      return new Observable<WatchResponse>((subscriber) => {
+        const subscription = source
+          .pipe(
+            map((histories) =>
+              histories.filter((his) => his.tenant === tenant)
+            ),
+            map((histories) =>
+              histories.filter((his) => isWatched(watch, his.current))
+            ),
+            filter((histories) => !!histories.length),
+            map((histories) => {
+              const response: WatchResponse = {
+                $typeName: "etcdserverpb.WatchResponse",
+                watchId: BigInt(watch.watchId),
+                compactRevision: 0n,
+                events: histories.map((history) => {
+                  return {
+                    $typeName: "mvccpb.Event",
+                    type:
+                      history.action === "PUT"
+                        ? Event_EventType.PUT
+                        : Event_EventType.DELETE,
+                    kv: history.current,
+                    prevKv: history.previous,
+                  };
+                }),
+                canceled: false,
+                cancelReason: "",
+                created: false,
+                fragment: false,
+              };
 
-                    log(history.current, {
-                      level: "success",
-                      tenant,
-                      action: "Watcher",
-                      output: `${watchers.map(
-                        (w) => stringify(w.watch).message
-                      )}`,
-                      context: {
-                        con: connectionId,
-                        req: requestId,
-                      },
-                    });
+              return response;
+            })
+          )
+          .subscribe({
+            next(response) {
+              subscriber.next(response);
+            },
+            error(err) {
+              subscriber.error(err);
+            },
+            complete() {
+              subscriber.complete();
+            },
+          });
 
-                    return from(watchers);
-                  }),
-                  groupBy((x) => x.watch.watchId),
-                  concatMap((group$) =>
-                    group$.pipe(
-                      map((x) => x.history),
-                      toArray(),
-                      map((histories) => {
-                        const watch = this.watches
-                          .get(tenant)
-                          ?.get(Number(group$.key));
-
-                        return {
-                          watchId: group$.key,
-                          watch,
-                          histories: histories.filter((history) => {
-                            // if (!watch?.prevKv) {
-                            //   delete history.previous;
-                            // }
-
-                            return (
-                              history.current.modRevision >=
-                              watch?.startRevision!
-                            );
-                          }),
-                        };
-                      })
-                    )
-                  ),
-                  filter(({ watch, histories }) => {
-                    return !!histories.length || !!watch?.progressNotify;
-                  }),
-                  map(({ watchId, histories }) => {
-                    const response: StreamResponse<
-                      WatchRequest,
-                      WatchResponse
-                    > = {
-                      tenant,
-                      connectionId,
-                      requestId,
-                      signal,
-                      request: {
-                        $typeName: "etcdserverpb.WatchRequest",
-                        requestUnion: {
-                          case: "progressRequest",
-                          value: {
-                            $typeName: "etcdserverpb.WatchProgressRequest",
-                          },
-                        },
-                      },
-                      response: {
-                        $typeName: "etcdserverpb.WatchResponse",
-                        watchId: BigInt(watchId),
-                        compactRevision: 0n,
-                        events: histories.map((history) => {
-                          return {
-                            $typeName: "mvccpb.Event",
-                            type:
-                              history.action === "PUT"
-                                ? Event_EventType.PUT
-                                : Event_EventType.DELETE,
-                            kv: history.current,
-                            prevKv: history.previous,
-                          };
-                        }),
-                        canceled: false,
-                        cancelReason: "",
-                        created: false,
-                        fragment: false,
-                      },
-                    };
-
-                    return response;
-                  })
-                )
-              )
-            )
-            .subscribe({
-              next(response) {
-                subscriber.next(response);
-              },
-              error(err) {
-                subscriber.error(err);
-              },
-              complete() {
-                subscriber.complete();
-              },
-            });
-
-          return () => {
-            subscription.unsubscribe();
-          };
-        }
-      );
+        return () => {
+          subscription.unsubscribe();
+        };
+      });
     };
   }
 
-  mapErrorToResponse(
-    tenant: string,
-    connectionId: string,
-    requestId: string,
-    signal: AbortSignal
-  ): OperatorFunction<Error, StreamResponse<WatchRequest, WatchResponse>> {
-    return (
-      source: Observable<Error>
-    ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
-      return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
-        (subscriber) => {
-          const subscription = source
-            .pipe(
-              concatMap((source) => {
-                return from(
-                  Array.from(this.watches.get(tenant)?.values() || []).map(
-                    (watch) => {
-                      return {
-                        ..._.cloneDeep(watch),
-                        cancelReason: source.message,
-                      };
-                    }
-                  )
-                );
-              }),
-              filter(
-                (watch) =>
-                  watch.tenant === tenant && watch.connectionId === connectionId
-              ),
-              map((watch) => {
-                const request: WatchRequest = {
-                  $typeName: "etcdserverpb.WatchRequest",
-                  requestUnion: {
-                    case: "cancelRequest",
-                    value: {
-                      $typeName: "etcdserverpb.WatchCancelRequest",
-                      watchId: watch.watchId,
-                    },
-                  },
-                };
-                return request;
-              }),
-              this.mapRequestToResponse(tenant, connectionId, requestId, signal)
-            )
-            .subscribe({
-              next(response) {
-                subscriber.next(response);
-              },
-              error(err) {
-                subscriber.error(err);
-              },
-              complete() {
-                subscriber.complete();
-              },
-            });
+  // mapErrorToResponse(
+  //   tenant: string,
+  //   connectionId: string,
+  //   requestId: string,
+  //   signal: AbortSignal
+  // ): OperatorFunction<Error, StreamResponse<WatchRequest, WatchResponse>> {
+  //   return (
+  //     source: Observable<Error>
+  //   ): Observable<StreamResponse<WatchRequest, WatchResponse>> => {
+  //     return new Observable<StreamResponse<WatchRequest, WatchResponse>>(
+  //       (subscriber) => {
+  //         const subscription = source
+  //           .pipe(
+  //             concatMap((source) => {
+  //               return from(
+  //                 Array.from(this.watches.get(tenant)?.values() || []).map(
+  //                   (watch) => {
+  //                     return {
+  //                       ..._.cloneDeep(watch),
+  //                       cancelReason: source.message,
+  //                     };
+  //                   }
+  //                 )
+  //               );
+  //             }),
+  //             filter(
+  //               (watch) =>
+  //                 watch.tenant === tenant && watch.connectionId === connectionId
+  //             ),
+  //             map((watch) => {
+  //               const request: WatchRequest = {
+  //                 $typeName: "etcdserverpb.WatchRequest",
+  //                 requestUnion: {
+  //                   case: "cancelRequest",
+  //                   value: {
+  //                     $typeName: "etcdserverpb.WatchCancelRequest",
+  //                     watchId: watch.watchId,
+  //                   },
+  //                 },
+  //               };
+  //               return request;
+  //             }),
+  //             this.mapRequestToResponse(tenant, connectionId, signal)
+  //           )
+  //           .subscribe({
+  //             next(response) {
+  //               subscriber.next(response);
+  //             },
+  //             error(err) {
+  //               subscriber.error(err);
+  //             },
+  //             complete() {
+  //               subscriber.complete();
+  //             },
+  //           });
 
-          return () => {
-            subscription.unsubscribe();
-          };
-        }
-      );
-    };
-  }
+  //         return () => {
+  //           subscription.unsubscribe();
+  //         };
+  //       }
+  //     );
+  //   };
+  // }
 }

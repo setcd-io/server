@@ -381,10 +381,8 @@ export class LeaseHandler extends BaseHandler {
               > = {
                 tenant,
                 connectionId,
-                requestId,
                 request: source,
                 response: keepAlive,
-                signal,
               };
               return response;
             })

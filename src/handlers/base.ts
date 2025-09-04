@@ -47,10 +47,8 @@ export type StreamRequest<Req> = {
 export type StreamResponse<Req, Res> = {
   tenant: string;
   connectionId: string;
-  requestId: string;
   request: Req;
   response: Res;
-  signal: AbortSignal;
 };
 
 export abstract class BaseHandler {

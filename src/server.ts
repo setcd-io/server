@@ -122,10 +122,6 @@ async function main(ctx: Context) {
       .join(" ")}\n`
   );
 
-  const stats = interval(1000, asyncScheduler).subscribe(() => {
-    watch.stats();
-  });
-
   if (isLocal) {
     // const sub = tableMonitor.records$
     //   .pipe(
@@ -151,8 +147,6 @@ async function main(ctx: Context) {
 
     ctx.on("abort", ({ code }) => {
       console.log("Server Stopping...");
-      // sub.unsubscribe();
-      stats.unsubscribe();
       server.close();
       process.nextTick(() => {
         if (code) {

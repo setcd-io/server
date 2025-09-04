@@ -91,7 +91,7 @@ export type TenantHistory<T> = {
 };
 
 export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
-  private history: CloudReplaySubject<TenantHistory<KeyValue>>;
+  public readonly history: CloudReplaySubject<TenantHistory<KeyValue>>;
 
   constructor(ctx: Context, private leaseHandler: LeaseHandler) {
     super(ctx, "kv");
@@ -117,32 +117,6 @@ export class TenantKVTable extends TenantTable<KVSchema, "kv"> {
     ctx.on("abort", () => {
       // expiration.unsubscribe();
     });
-  }
-
-  public history$(tenant: string): Observable<TenantHistory<KeyValue>[]> {
-    return from(this.ctx.minRevision(tenant)).pipe(
-      switchMap((minRevision) =>
-        this.history.pipe(
-          filter(
-            (h) => h.tenant === tenant && h.current.modRevision >= minRevision
-          )
-        )
-      ),
-      tap((h) => {
-        log(h.previous, {
-          level: "success",
-          action: "KeyValueHistory",
-          tenant: h.tenant,
-          output: h.current,
-          context: {
-            action: h.action,
-          },
-        });
-      }),
-      bufferTime(HISTORY_TIMEOUT, undefined, HISTORY_SIZE),
-      // map((h) => [h]),
-      share()
-    );
   }
 
   async putKey(
