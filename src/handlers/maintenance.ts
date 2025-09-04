@@ -29,14 +29,14 @@ export class MaintenanceHandler extends BaseHandler {
       dbSize: BigInt(size),
       dbSizeInUse: 0n,
       errors: [],
-      version: "3.5.0",
+      version: "3.6.0",
       isLearner: false,
       leader: 0n,
       raftAppliedIndex: 0n,
       raftIndex: 0n,
       raftTerm: 0n,
       dbSizeQuota: 0n,
-      storageVersion: "3.5.0",
+      storageVersion: "3.6.0",
       downgradeInfo: undefined,
     };
 

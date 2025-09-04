@@ -231,8 +231,8 @@ npm run --silent
 
 ## Git Workflow
 
-Current branch: `etcd-3.5`
-Main branch: `etcd-3.5`
+Current branch: `etcd-3.6`
+Main branch: `etcd-3.6`
 
 ## Debugging Reminders
 - Make sure you remove the WHAT="..." (full test suite) before deciding that the fix you implemented is good

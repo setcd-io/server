@@ -16,6 +16,7 @@ import { ClusterHandler } from "./handlers/cluster";
 import { AuthHandler } from "./handlers/auth";
 import { TENANT } from "./util/const";
 import {
+  asapScheduler,
   asyncScheduler,
   defer,
   firstValueFrom,
@@ -25,8 +26,9 @@ import {
 } from "rxjs";
 
 const schedule = <T>(incoming: Promise<T>): Promise<T> => {
-  const task = defer(() => incoming).pipe(observeOn(asyncScheduler));
-  return firstValueFrom(task);
+  return incoming;
+  // const task = defer(() => incoming).pipe(observeOn(queueScheduler));
+  // return firstValueFrom(task);
 };
 
 export const createRouter = (handlers: {

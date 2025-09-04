@@ -1,6 +1,6 @@
 {
   "name": "@setcd-io/server",
-  "version": "3.5.0-31",
+  "version": "3.6.0-0",
   "main": "dist/server.js",
   "engines": {
     "node": ">=20",
@@ -30,7 +30,7 @@
     "@connectrpc/connect-fastify": "^2.0.0",
     "@connectrpc/connect-node": "^2.0.0",
     "@opentelemetry/api": "^1.9.0",
-    "@setcd-io/connectrpc-etcd": "github:setcd-io/connectrpc-etcd#etcd-3.5",
+    "@setcd-io/connectrpc-etcd": "github:setcd-io/connectrpc-etcd#etcd-3.6",
     "@types/aws-lambda": "^8.10.147",
     "@types/blocked-at": "^1.0.4",
     "@types/bn.js": "^5.1.6",

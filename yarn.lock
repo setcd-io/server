@@ -1043,9 +1043,9 @@
   resolved "https://registry.yarnpkg.com/@sec-ant/readable-stream/-/readable-stream-0.4.1.tgz#60de891bb126abfdc5410fdc6166aca065f10a0c"
   integrity sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==
 
-"@setcd-io/connectrpc-etcd@github:setcd-io/connectrpc-etcd#etcd-3.5":
-  version "3.5.21"
-  resolved "https://codeload.github.com/setcd-io/connectrpc-etcd/tar.gz/33117ce232977618ff26fcbd6e161a5d9a537ee2"
+"@setcd-io/connectrpc-etcd@github:setcd-io/connectrpc-etcd#etcd-3.6":
+  version "3.6.4"
+  resolved "https://codeload.github.com/setcd-io/connectrpc-etcd/tar.gz/8e7d28252c18e2f43e70295444edea781ba4c133"
 
 "@sindresorhus/merge-streams@^4.0.0":
   version "4.0.0"
