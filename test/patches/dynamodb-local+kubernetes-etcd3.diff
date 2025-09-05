@@ -30,7 +30,7 @@ index b8c5641c..22c2ae3b 100644
  		DialOptions: []grpc.DialOption{grpc.WithBlock()},
  		Logger:      zaptest.NewLogger(t, zaptest.Level(zapcore.ErrorLevel)).Named("etcd-client"),
 diff --git a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
-index 11afc615..d25e95d6 100644
+index 11afc615..1b156a0b 100644
 --- a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
 +++ b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
 @@ -135,11 +135,13 @@ func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
@@ -47,11 +47,3 @@ index 11afc615..d25e95d6 100644
  	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConcurrentWatchObjectDecode, true)
  	ctx, store, _ := testSetup(t)
  	storagetesting.RunWatchSemantics(ctx, t, store)
-@@ -156,6 +158,7 @@ func TestWatchListMatchSingle(t *testing.T) {
- }
- 
- func TestWatchErrorEventIsBlockingFurtherEvent(t *testing.T) {
-+	t.Skip("IDK")
- 	ctx, store, _ := testSetup(t)
- 	storagetesting.RunWatchErrorIsBlockingFurtherEvents(ctx, t, &storeWithPrefixTransformer{store})
- }
