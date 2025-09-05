@@ -223,23 +223,33 @@ export class WatchHandler extends BaseHandler {
 
               return combineLatest([
                 this.ctx.nextWatch(tenant),
+                this.ctx.minRevision(tenant),
                 this.ctx.currentRevision(tenant),
               ]).pipe(
-                map(([watchId, currentRevision]) => {
+                map(([watchId, minRevision, currentRevision]) => {
                   request.value.watchId = BigInt(watchId);
 
                   if (request.value.startRevision === 0n) {
                     request.value.startRevision = BigInt(currentRevision);
                   }
 
+                  let created = true;
+                  let canceled = false;
+                  let cancelReason = "";
+                  let compactRevision = 0n;
+
+                  if (request.value.startRevision <= BigInt(minRevision)) {
+                    throw new ErrGRPCCompacted();
+                  }
+
                   const response: WatchResponse = {
                     $typeName: "etcdserverpb.WatchResponse",
                     watchId: BigInt(watchId),
-                    compactRevision: 0n,
+                    compactRevision,
                     events: [],
-                    canceled: false,
-                    cancelReason: "",
-                    created: true,
+                    canceled,
+                    cancelReason,
+                    created,
                     fragment: false,
                   };
 
