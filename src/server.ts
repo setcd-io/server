@@ -24,10 +24,8 @@ import {
   TENANT,
 } from "./util/const";
 
-const isStatus = process.argv.slice(-1)[0] === "status";
-const isVersion = process.argv.includes("--version");
-const isHttp2 = !process.argv.includes("--no-http2");
-const isLocal = !process.env.AWS_LAMBDA_RUNTIME_API;
+const isVersion = context.env.isVersion;
+const isHttp2 = context.env.isHttp2;
 
 const intercept: Interceptor = (next) => async (req) => {
   req.contextValues?.set(CONNECTION_ID, nanoid(8));
@@ -53,11 +51,6 @@ async function main(ctx: Context) {
     await ctx.version();
     return;
   }
-
-  // if (isStatus) {
-  //   await ctx.status();
-  //   return;
-  // }
 
   console.log("\nStarting Server...");
 
@@ -122,43 +115,19 @@ async function main(ctx: Context) {
       .join(" ")}\n`
   );
 
-  if (isLocal) {
-    // const sub = tableMonitor.records$
-    //   .pipe(
-    //     switchMap((event) =>
-    //       from(
-    //         axios.post("https://localhost:2379/events/dynamodb", event, {
-    //           validateStatus: () => true,
-    //           httpsAgent: new Agent({
-    //             checkServerIdentity: () => undefined,
-    //             rejectUnauthorized: false,
-    //             cert: undefined,
-    //             key: undefined,
-    //           }),
-    //           headers: {
-    //             Host: "dynamodb.amazonaws.com",
-    //             "Content-Type": "application/json",
-    //           },
-    //         })
-    //       )
-    //     )
-    //   )
-    //   .subscribe(() => {});
-
-    ctx.on("abort", ({ code }) => {
-      console.log("Server Stopping...");
-      server.close();
-      process.nextTick(() => {
-        if (code) {
-          console.log("Server Exited with code", code);
-          process.exit(code);
-        } else {
-          console.log("Server Exited");
-          process.exit();
-        }
-      });
+  ctx.on("abort", ({ code }) => {
+    console.log("Server Stopping...");
+    server.close();
+    process.nextTick(() => {
+      if (code) {
+        console.log("Server Exited with code", code);
+        process.exit(code);
+      } else {
+        console.log("Server Exited");
+        process.exit();
+      }
     });
-  }
+  });
 }
 
 void main(context)

@@ -12,7 +12,7 @@
     "dev": "tsx watch --clear-screen=false src/server.ts",
     "build": "yarn build:server",
     "build:server": "tsup src/server.ts --sourcemap --dts --format cjs --target esnext --cjsInterop",
-    "build:exe": "yarn build && pkg dist/server.js --compress Brotli --output dist/server --targets node22-linuxstatic-x64,node22-linuxstatic-arm64",
+    "build:exe": "yarn build && pkg dist/server.js --compress Brotli --output dist/server --targets node22-linuxstatic-x64,node22-linuxstatic-arm64,node22-macos-x64,node22-macos-arm64",
     "start:server": "node dist/server.js",
     "start": "yarn build && node dist/server.js",
     "start:dev": "tsx src/server.ts",
@@ -40,6 +40,7 @@
     "@types/node": "^22.10.7",
     "@types/promise-retry": "^1.1.6",
     "@types/stream-buffers": "^3.0.7",
+    "@types/yargs": "^17.0.33",
     "@yao-pkg/pkg": "^6.4.1",
     "axios": "~1.7",
     "axios-http2-adapter": "^1.0.2",
@@ -70,7 +71,8 @@
     "tsup": "^8.3.5",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
-    "ulid": "^2.3.0"
+    "ulid": "^2.3.0",
+    "yargs": "^17.0.0"
   },
   "scaffoldly": {
     "runtime": "node:22-alpine",
@@ -88,6 +90,5 @@
       "build": "npm run build",
       "start": "node dist/server.js --no-http2"
     }
-  },
-  "dependencies": {}
+  }
 }

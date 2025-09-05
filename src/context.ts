@@ -4,7 +4,7 @@ dotenvExpand.expand(dotenv.config());
 
 // import { Etcd3 } from "etcd3";
 import { unmarshallOptions } from "@aws-sdk/lib-dynamodb";
-import { Logger, P } from "pino";
+import { Logger } from "pino";
 import EventEmitter from "events";
 import { BaseSchema, RevisionTable } from "./storage/base";
 import { ConnectError } from "@connectrpc/connect";
@@ -17,6 +17,8 @@ import { readFileSync } from "fs";
 import { DynamoDB } from "cloudrx";
 import { firstValueFrom, Observable } from "rxjs";
 import { DynamoDBImpl } from "cloudrx/dist/providers/aws/provider";
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
 
 type ContextOpts = {
   logger?: Logger;
@@ -37,6 +39,59 @@ interface Context extends AbortController {
   abort(reason?: AbortReason, ctx?: AbortContext): void;
 }
 
+class Environment {
+  private _argv = yargs(hideBin(process.argv))
+    .command("help", "Show help information", {}, () => {
+      yargs.showHelp();
+      process.exit(0);
+    })
+    .option("cert-file", {
+      type: "string",
+      description: "Path to the certificate file (overridden by $CERTFILE)",
+      default: "./certs/localhost.crt",
+    })
+    .option("key-file", {
+      type: "string",
+      description: "Path to the private key file (overridden by $KEYFILE)",
+      default: "./certs/localhost.key",
+    })
+    .option("version", {
+      type: "boolean",
+      description: "Show version information",
+      default: false,
+    })
+    .option("http2", {
+      type: "boolean",
+      description: "Enable HTTP/2 support (use --no-http2 to disable)",
+      default: true,
+    })
+    .help()
+    .alias("help", "h")
+    .parseSync();
+
+  constructor() {}
+
+  get certfile(): string {
+    return process.env.CERTFILE || this._argv["cert-file"];
+  }
+
+  get keyfile(): string {
+    return process.env.KEYFILE || this._argv["key-file"];
+  }
+
+  get isVersion(): boolean {
+    return this._argv.version;
+  }
+
+  get isHelp(): boolean {
+    return Boolean(this._argv.help);
+  }
+
+  get isHttp2(): boolean {
+    return Boolean(this._argv.http2);
+  }
+}
+
 class Context
   extends EventEmitter<{
     abort: [{ reason: string | Error; ctx?: AbortContext; code: number }];
@@ -47,6 +102,7 @@ class Context
 
   private readonly logger?: Logger;
   private readonly _abort: AbortController;
+  private readonly environment: Environment;
 
   private _kvStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
@@ -58,6 +114,7 @@ class Context
 
   constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
+    this.environment = new Environment();
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
 
@@ -323,19 +380,15 @@ class Context
   }
 
   async certfile(): Promise<Buffer> {
-    return readFileSync(
-      process.env.CERTDIR && process.env.CERTFILE
-        ? join(process.env.CERTDIR, process.env.CERTFILE)
-        : `src/certs/localhost.crt`
-    );
+    return readFileSync(this.environment.certfile);
   }
 
   async keyfile(): Promise<Buffer> {
-    return readFileSync(
-      process.env.CERTDIR && process.env.KEYFILE
-        ? join(process.env.CERTDIR, process.env.KEYFILE)
-        : `src/certs/localhost.key`
-    );
+    return readFileSync(this.environment.keyfile);
+  }
+
+  get env(): Environment {
+    return this.environment;
   }
 }
 

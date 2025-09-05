@@ -10,11 +10,10 @@ RUN --mount=type=cache,target=/usr/local/share/.cache \
     yarn
 
 RUN mkdir proto && cp /work/node_modules/etcd3/proto/* /work/proto/
-COPY --from=bitnami/etcd:3.6.4 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
+COPY --from=gcr.io/etcd-development/etcd:v3.6.4 /usr/local/bin/etcdctl /usr/local/bin/etcdctl
 
-ENV CERTDIR=/work/src/certs
-ENV CERTFILE=localhost.crt
-ENV KEYFILE=localhost.key
+ENV CERTFILE=/work/src/certs/localhost.crt
+ENV KEYFILE=/work/src/certs/localhost.key
 
 ENTRYPOINT [ "yarn" ]
 CMD [ "start:dev" ]
@@ -32,17 +31,16 @@ FROM node:22-alpine AS arch
 WORKDIR /work
 COPY --from=exe /work/dist/* /work/
 RUN ARCH=$(node -e "console.log(process.arch)") && \
-    cp server-${ARCH} server && \
+    cp server-linuxstatic-${ARCH} server && \
     chmod +x server && \
     ./server --version
 
 FROM scratch
-COPY --from=bitnami/etcd:3.6.4 /opt/bitnami/etcd/bin/etcdctl /usr/bin/etcdctl
-COPY --from=arch /work/server /usr/bin/server
+COPY --from=gcr.io/etcd-development/etcd:v3.6.4 /usr/local/bin/etcdctl /usr/local/bin/etcdctl
+COPY --from=arch /work/server /usr/local/bin/etcd
 COPY --from=full /work/src/certs/localhost.crt /etc/ssl/certs/localhost.crt
 COPY --from=full /work/src/certs/localhost.key /etc/ssl/private/localhost.key
-ENV CERTDIR=/etc/ssl
-ENV CERTFILE=certs/localhost.crt
-ENV KEYFILE=private/localhost.key
-ENTRYPOINT [ "server" ]
+ENV CERTFILE=/etc/ssl/certs/localhost.crt
+ENV KEYFILE=/etc/ssl/private/localhost.key
+ENTRYPOINT [ "etcd" ]
 EXPOSE 2379
