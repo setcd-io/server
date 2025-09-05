@@ -128,57 +128,64 @@ export const log = (
     return;
   }
 
-  const severityColor =
-    level === "error"
-      ? chalk.red
-      : level === "warn"
-      ? chalk.yellow
-      : level === "info"
-      ? chalk.blue
-      : chalk.green;
+  const now = performance.now().toFixed(3);
 
-  const symbol =
-    level === "error"
-      ? severityColor("✘")
-      : level === "warn"
-      ? severityColor("▲")
-      : level === "info"
-      ? severityColor("ℹ︎")
-      : severityColor("✔︎");
+  // Make sure logs are non-blocking
+  queueMicrotask(() => {
+    const severityColor =
+      level === "error"
+        ? chalk.red
+        : level === "warn"
+        ? chalk.yellow
+        : level === "info"
+        ? chalk.blue
+        : chalk.green;
 
-  tenant =
-    tenant === DEFAULT_TENANT ? chalk.yellow(tenant) : chalk.cyan(tenant);
+    const symbol =
+      level === "error"
+        ? severityColor("✘")
+        : level === "warn"
+        ? severityColor("▲")
+        : level === "info"
+        ? severityColor("ℹ︎")
+        : severityColor("✔︎");
 
-  action = chalk.green(action);
+    tenant =
+      tenant === DEFAULT_TENANT ? chalk.yellow(tenant) : chalk.cyan(tenant);
 
-  if (message && typeof message !== "string") {
-    message = stringify(message).message;
-  }
+    action = chalk.green(action);
 
-  if (output && typeof output !== "string") {
-    const { message, revision } = stringify(output);
-    output = message;
-    if (revision) {
-      context = {
-        ...context,
-        rev: revision,
-      };
+    if (message && typeof message !== "string") {
+      message = stringify(message).message;
     }
-  }
 
-  let io = chalk.yellow(message ? message : chalk.dim("[empty]"));
-  if (output) {
-    io = `${io} ${chalk.dim("==>")} ${severityColor(output)}`;
-  }
+    if (output && typeof output !== "string") {
+      const { message, revision } = stringify(output);
+      output = message;
+      if (revision) {
+        context = {
+          ...context,
+          rev: revision,
+        };
+      }
+    }
 
-  context = Object.entries(context || {}).reduce((acc, [key, value]) => {
-    acc[key] = chalk.dim(`[${key}:${chalk.blue(value)}] `);
-    return acc;
-  }, {} as Record<string, string>);
+    let io = chalk.yellow(message ? message : chalk.dim("[empty]"));
+    if (output) {
+      io = `${io} ${chalk.dim("==>")} ${severityColor(output)}`;
+    }
 
-  console.log(
-    `${symbol} [${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
-  );
+    context = Object.entries(context || {}).reduce((acc, [key, value]) => {
+      acc[key] = chalk.dim(`[${key}:${chalk.blue(value)}] `);
+      return acc;
+    }, {} as Record<string, string>);
+
+    console.log(
+      `${symbol} [${chalk.dim(
+        now
+      )}] [${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
+    );
+  });
 };
 
 export const logRequest = async (

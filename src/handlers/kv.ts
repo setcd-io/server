@@ -102,7 +102,7 @@ export class KVHandler extends BaseHandler {
 
     return {
       $typeName: "etcdserverpb.PutResponse",
-      header: await this.header(tenant),
+      header: await this.header(tenant, BigInt(revision)),
       kv: kv || undefined,
       prevKv: req.prevKv ? prevKv : undefined,
     };
@@ -365,6 +365,7 @@ export class KVHandler extends BaseHandler {
                   $typeName: "etcdserverpb.ResponseOp",
                   response: { case: "responsePut", value: r },
                 });
+                acc.header = r.header;
                 return acc;
               })
               .catch((e) => {
@@ -384,6 +385,7 @@ export class KVHandler extends BaseHandler {
                   $typeName: "etcdserverpb.ResponseOp",
                   response: { case: "responseRange", value: r },
                 });
+                // DEVNOTE: DO NOT set the header from a non-mutating operation
                 return acc;
               })
               .catch((e) => {
@@ -403,6 +405,7 @@ export class KVHandler extends BaseHandler {
                   $typeName: "etcdserverpb.ResponseOp",
                   response: { case: "responseDeleteRange", value: r },
                 });
+                acc.header = r.header;
                 return acc;
               })
               .catch((e) => {
@@ -422,6 +425,7 @@ export class KVHandler extends BaseHandler {
                   $typeName: "etcdserverpb.ResponseOp",
                   response: { case: "responseTxn", value: r },
                 });
+                acc.header = r.header;
                 acc.succeeded = acc.succeeded && r.succeeded;
                 return acc;
               })
@@ -443,11 +447,11 @@ export class KVHandler extends BaseHandler {
       Promise.resolve({
         $typeName: "etcdserverpb.TxnResponse",
         succeeded: true,
+        header: await this.header(tenant, BigInt(revision)),
         responses: [],
       } as TxnResponse)
     );
 
-    response.header = await this.header(tenant);
     response.succeeded = response.succeeded && success;
     return response;
   }

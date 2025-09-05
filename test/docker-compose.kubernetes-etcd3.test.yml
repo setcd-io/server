@@ -21,4 +21,4 @@ services:
         set -e
         cd /test && \
           cd staging/src/k8s.io/apiserver/pkg/storage/etcd3 && \
-            go test -v -run "$$TESTS" # -failfast
+            go test -v -run "$$TESTS" -failfast

@@ -54,10 +54,10 @@ export type StreamResponse<Req, Res> = {
 export abstract class BaseHandler {
   constructor(protected ctx: Context) {}
 
-  async header(tenant: string): Promise<ResponseHeader> {
+  async header(tenant: string, revision?: bigint): Promise<ResponseHeader> {
     return {
       $typeName: "etcdserverpb.ResponseHeader",
-      revision: BigInt(await this.ctx.currentRevision(tenant)),
+      revision: revision || BigInt(await this.ctx.currentRevision(tenant)),
       raftTerm: 0n,
       memberId: 0n,
       clusterId: 0n,

@@ -156,7 +156,7 @@ export class WatchHandler extends BaseHandler {
     const requests = from(request).pipe(observeOn(asyncScheduler), share());
     const history = this.kv.kv.history.pipe(
       filter((his) => his.tenant === tenant),
-      bufferTime(100, undefined, 10), // TODO: Use multiplier based on load average instead of fixed 100
+      bufferTime(10, undefined, 10), // Give a little breathing room to batch events
       shareReplay()
     );
 

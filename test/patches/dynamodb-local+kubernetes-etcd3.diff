@@ -1,15 +1,3 @@
-diff --git a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/store_test.go b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/store_test.go
-index 4a4ef819..cb4ee510 100644
---- a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/store_test.go
-+++ b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/store_test.go
-@@ -335,6 +335,7 @@ func increaseRV(client *clientv3.Client) storagetesting.IncreaseRVFunc {
- }
- 
- func TestListInconsistentContinuation(t *testing.T) {
-+	t.Skip("IDK")
- 	ctx, store, client := testSetup(t)
- 	storagetesting.RunTestListInconsistentContinuation(ctx, t, store, compactStorage(client.Client))
- }
 diff --git a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/testserver/test_server.go b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/testserver/test_server.go
 index b8c5641c..22c2ae3b 100644
 --- a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/testserver/test_server.go
@@ -29,21 +17,3 @@ index b8c5641c..22c2ae3b 100644
  		DialTimeout: 10 * time.Second,
  		DialOptions: []grpc.DialOption{grpc.WithBlock()},
  		Logger:      zaptest.NewLogger(t, zaptest.Level(zapcore.ErrorLevel)).Named("etcd-client"),
-diff --git a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
-index 11afc615..1b156a0b 100644
---- a/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
-+++ b/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher_test.go
-@@ -135,11 +135,13 @@ func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
- }
- 
- func TestEtcdWatchSemantics(t *testing.T) {
-+	t.Skip("IDK")
- 	ctx, store, _ := testSetup(t)
- 	storagetesting.RunWatchSemantics(ctx, t, store)
- }
- 
- func TestEtcdWatchSemanticsWithConcurrentDecode(t *testing.T) {
-+	t.Skip("IDK")
- 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConcurrentWatchObjectDecode, true)
- 	ctx, store, _ := testSetup(t)
- 	storagetesting.RunWatchSemantics(ctx, t, store)
