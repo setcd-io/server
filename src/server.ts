@@ -24,7 +24,6 @@ import {
   TENANT,
 } from "./util/const";
 
-const isVersion = context.env.isVersion;
 const isHttp2 = context.env.isHttp2;
 
 const intercept: Interceptor = (next) => async (req) => {
@@ -47,11 +46,6 @@ const intercept: Interceptor = (next) => async (req) => {
 };
 
 async function main(ctx: Context) {
-  if (isVersion) {
-    await ctx.version();
-    return;
-  }
-
   console.log("\nStarting Server...");
 
   let https: http2.SecureServerOptions | boolean = {

@@ -55,16 +55,12 @@ class Environment {
       description: "Path to the private key file (overridden by $KEYFILE)",
       default: "./certs/localhost.key",
     })
-    .option("version", {
-      type: "boolean",
-      description: "Show version information",
-      default: false,
-    })
     .option("http2", {
       type: "boolean",
       description: "Enable HTTP/2 support (use --no-http2 to disable)",
       default: true,
     })
+    .version()
     .help()
     .alias("help", "h")
     .parseSync();
@@ -77,14 +73,6 @@ class Environment {
 
   get keyfile(): string {
     return process.env.KEYFILE || this._argv["key-file"];
-  }
-
-  get isVersion(): boolean {
-    return this._argv.version;
-  }
-
-  get isHelp(): boolean {
-    return Boolean(this._argv.help);
   }
 
   get isHttp2(): boolean {
