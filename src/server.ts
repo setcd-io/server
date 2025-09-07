@@ -47,6 +47,7 @@ const intercept: Interceptor = (next) => async (req) => {
 
 async function main(ctx: Context) {
   console.log("\nStarting Server...");
+  console.log(ctx.env.toString());
 
   let https: http2.SecureServerOptions | boolean = {
     key: await ctx.keyfile(),

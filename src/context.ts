@@ -76,7 +76,15 @@ class Environment {
   }
 
   get isHttp2(): boolean {
-    return Boolean(this._argv.http2);
+    return this._argv.http2;
+  }
+
+  toString(): string {
+    return `\n${[
+      `Cert File: ${this.certfile}`,
+      `Key File: ${this.keyfile}`,
+      `HTTP/2: ${this.isHttp2}`,
+    ].join("\n")}\n`;
   }
 }
 

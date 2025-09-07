@@ -20,7 +20,7 @@ services:
           "CMD",
           "etcdctl",
           "endpoint",
-          "status",
+          "health",
           "--cacert=/certs/localhost.crt",
           "--cert=/certs/localhost.crt",
           "--key=/certs/localhost.key",
