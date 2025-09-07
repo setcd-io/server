@@ -47,19 +47,22 @@ class Environment {
     })
     .option("cert-file", {
       type: "string",
-      description: "Path to the certificate file (overridden by $CERTFILE)",
+      description: "Path to the certificate file",
       default: "./certs/localhost.crt",
     })
+    .alias("cert-file", "certfile")
     .option("key-file", {
       type: "string",
-      description: "Path to the private key file (overridden by $KEYFILE)",
+      description: "Path to the private key file",
       default: "./certs/localhost.key",
     })
+    .alias("key-file", "keyfile")
     .option("http2", {
       type: "boolean",
       description: "Enable HTTP/2 support (use --no-http2 to disable)",
       default: true,
     })
+    .env()
     .version()
     .help()
     .alias("help", "h")
@@ -68,11 +71,11 @@ class Environment {
   constructor() {}
 
   get certfile(): string {
-    return process.env.CERTFILE || this._argv["cert-file"];
+    return this._argv["cert-file"];
   }
 
   get keyfile(): string {
-    return process.env.KEYFILE || this._argv["key-file"];
+    return this._argv["key-file"];
   }
 
   get isHttp2(): boolean {
