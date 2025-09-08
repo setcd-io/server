@@ -277,7 +277,7 @@ export class WatchHandler extends BaseHandler {
               if (request.value.progressNotify) {
                 response$ = merge(
                   response$,
-                  interval(1000).pipe(
+                  interval(1000 * 60).pipe(
                     map(() => {
                       const res = _.cloneDeep(response);
                       res.created = false;

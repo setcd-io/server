@@ -58,9 +58,9 @@ export abstract class BaseHandler {
     return {
       $typeName: "etcdserverpb.ResponseHeader",
       revision: revision || BigInt(await this.ctx.currentRevision(tenant)),
-      raftTerm: 0n,
-      memberId: 0n,
-      clusterId: 0n,
+      raftTerm: BigInt(1),
+      memberId: BigInt(1),
+      clusterId: BigInt(1),
     };
   }
 

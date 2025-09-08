@@ -21,23 +21,25 @@ export class MaintenanceHandler extends BaseHandler {
   }
 
   async status(tenant: string, req: StatusRequest): Promise<StatusResponse> {
-    const size = Number.MAX_SAFE_INTEGER;
-
     const resp: StatusResponse = {
       $typeName: "etcdserverpb.StatusResponse",
       header: await this.header(tenant),
       dbSize: BigInt(1),
-      dbSizeInUse: 0n,
+      dbSizeInUse: BigInt(1),
       errors: [],
       version: "3.6.0",
       isLearner: false,
-      leader: 0n,
-      raftAppliedIndex: 0n,
-      raftIndex: 0n,
-      raftTerm: 0n,
-      dbSizeQuota: BigInt(size),
+      leader: BigInt(1),
+      raftAppliedIndex: BigInt(1),
+      raftIndex: BigInt(1),
+      raftTerm: BigInt(1),
+      dbSizeQuota: BigInt(0),
       storageVersion: "3.6.0",
-      downgradeInfo: undefined,
+      downgradeInfo: {
+        $typeName: "etcdserverpb.DowngradeInfo",
+        enabled: false,
+        targetVersion: "",
+      },
     };
 
     return resp;
