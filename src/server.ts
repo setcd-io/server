@@ -24,8 +24,6 @@ import {
   TENANT,
 } from "./util/const";
 
-const isHttp2 = context.env.isHttp2;
-
 const intercept: Interceptor = (next) => async (req) => {
   req.contextValues?.set(CONNECTION_ID, nanoid(8));
 
@@ -46,8 +44,8 @@ const intercept: Interceptor = (next) => async (req) => {
 };
 
 async function main(ctx: Context) {
+  console.log(await ctx.repr());
   console.log("\nStarting Server...");
-  console.log(ctx.env.toString());
 
   let https: http2.SecureServerOptions | boolean = {
     key: await ctx.keyfile(),
@@ -57,7 +55,7 @@ async function main(ctx: Context) {
   };
 
   const server = (
-    isHttp2
+    ctx.env.isHttp2
       ? fastify({
           http2: true,
           https,

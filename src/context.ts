@@ -37,6 +37,7 @@ export class RevisionError extends ConnectError {
 
 interface Context extends AbortController {
   abort(reason?: AbortReason, ctx?: AbortContext): void;
+  repr(): Promise<string>;
 }
 
 class Environment {
@@ -81,14 +82,6 @@ class Environment {
   get isHttp2(): boolean {
     return this._argv.http2;
   }
-
-  toString(): string {
-    return `\n${[
-      `Cert File: ${this.certfile}`,
-      `Key File: ${this.keyfile}`,
-      `HTTP/2: ${this.isHttp2}`,
-    ].join("\n")}\n`;
-  }
 }
 
 class Context
@@ -101,19 +94,19 @@ class Context
 
   private readonly logger?: Logger;
   private readonly _abort: AbortController;
-  private readonly environment: Environment;
+  public readonly env: Environment;
 
   private _kvStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
-  public readonly leaseStorage: Observable<DynamoDBImpl<"pk", "sk">>;
-  public readonly historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  private _leaseStorage: Observable<DynamoDBImpl<"pk", "sk">>;
+  private _historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
 
   // TODO: Introduce a PersistentCounter Subject
   private revisions?: RevisionTable;
 
   constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
-    this.environment = new Environment();
+    this.env = new Environment();
     this._abort = opts?.abort || new AbortController();
     this.logger = opts?.logger || undefined;
 
@@ -127,12 +120,12 @@ class Context
       rangeKey: "sk",
     });
 
-    this.leaseStorage = DynamoDB.from("lease", {
+    this._leaseStorage = DynamoDB.from("lease", {
       hashKey: "pk",
       rangeKey: "sk",
     });
 
-    this.historyStorage = DynamoDB.from("his", {
+    this._historyStorage = DynamoDB.from("his", {
       hashKey: "pk",
       rangeKey: "sk",
     });
@@ -182,6 +175,14 @@ class Context
 
   get revisionStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
     return firstValueFrom(this._revisionStorage);
+  }
+
+  get leaseStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
+    return firstValueFrom(this._leaseStorage);
+  }
+
+  get historyStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
+    return firstValueFrom(this._historyStorage);
   }
 
   get unmarshalOptions(): unmarshallOptions {
@@ -374,20 +375,34 @@ class Context
     });
   }
 
-  async version(): Promise<void> {
-    console.log(`${name} v${version}`);
-  }
-
   async certfile(): Promise<Buffer> {
-    return readFileSync(this.environment.certfile);
+    return readFileSync(this.env.certfile);
   }
 
   async keyfile(): Promise<Buffer> {
-    return readFileSync(this.environment.keyfile);
+    return readFileSync(this.env.keyfile);
   }
 
-  get env(): Environment {
-    return this.environment;
+  async repr(): Promise<string> {
+    const lines = [
+      `${name} v${version}:`,
+      `→ Runtime:`,
+      `  ╟ Node.js: ${process.version}`,
+      `  ╟ Platform: ${process.platform} ${process.arch} ${process.release.name}`,
+      `  ╟ PID: ${process.pid}`,
+      `  ╙ Command: ${process.argv.join(" ")}`,
+      `→ Environment:`,
+      `  ╟ Cert File: ${this.env.certfile}`,
+      `  ╟ Key File: ${this.env.keyfile}`,
+      `  ╙ HTTP/2: ${this.env.isHttp2}`,
+      `→ Storage:`,
+      `  ╟ KV: ${(await this.kvStorage).tableArn}`,
+      `  ╟ Revision: ${(await this.revisionStorage).tableArn}`,
+      `  ╟ Lease: ${(await this.leaseStorage).tableArn}`,
+      `  ╙ History: ${(await this.historyStorage).tableArn}`,
+    ];
+
+    return lines.join("\n");
   }
 }
 

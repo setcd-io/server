@@ -1987,10 +1987,10 @@ cliui@^8.0.1:
     strip-ansi "^6.0.1"
     wrap-ansi "^7.0.0"
 
-cloudrx@^0.1.0-beta.20250901133910.5f2062a:
-  version "0.1.0-beta.20250903010351.0d4aa3f"
-  resolved "https://registry.yarnpkg.com/cloudrx/-/cloudrx-0.1.0-beta.20250903010351.0d4aa3f.tgz#a9939da30305a73fbb05317f54991bed86297a6e"
-  integrity sha512-0Bjz/bXtzQ7CRBdAxlhi/UR4ugBtZP0hDU7Iys8x0RQSz3SjCtXTDFRI5+BtZk6Gki1Bwnc1/Pwwczzmjt20gA==
+cloudrx@^0.1.0-beta.20250908112242.775e67a:
+  version "0.1.0-beta.20250908112242.775e67a"
+  resolved "https://registry.yarnpkg.com/cloudrx/-/cloudrx-0.1.0-beta.20250908112242.775e67a.tgz#381ae93c0f6dd25ef944b7eb730ac4099e5327f3"
+  integrity sha512-LMmQxz8LkeCIp78JjbQShgHxH6pExOEByYof/ZBUr6uj4CfcybOpiViBff+2+X9wPJCmmdaCo704Prfyfj/aKA==
   dependencies:
     "@aws-sdk/client-dynamodb" "^3.864.0"
     "@aws-sdk/client-dynamodb-streams" "^3.864.0"
