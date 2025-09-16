@@ -19,6 +19,7 @@ import { firstValueFrom, Observable } from "rxjs";
 import { DynamoDBImpl } from "cloudrx/dist/providers/aws/provider";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import parse from "parse-duration";
 
 type ContextOpts = {
   logger?: Logger;
@@ -72,6 +73,15 @@ class Environment {
       description: "Enable HTTP/2 support (use --no-http2 to disable)",
       default: true,
     })
+    .option("watch-progress-notify-interval", {
+      type: "string",
+      description: "Duration of periodical watch progress notification.",
+      default: "10m",
+    })
+    .alias(
+      "watch-progress-notify-interval",
+      "experimental-watch-progress-notify-interval"
+    )
     .env()
     .version()
     .help()
@@ -94,6 +104,10 @@ class Environment {
 
   get isHttp2(): boolean {
     return this._argv.http2;
+  }
+
+  get watchProgressNotifyInterval(): number {
+    return parse(this._argv["watch-progress-notify-interval"], "ms") as number;
   }
 }
 

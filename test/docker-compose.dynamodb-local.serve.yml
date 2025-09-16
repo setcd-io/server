@@ -13,7 +13,8 @@ services:
       # Use the JS Build for local execution
       target: full
     environment:
-      - SETCD_VERBOSE=false
+      - SETCD_VERBOSE=true
+      - WATCH_PROGRESS_NOTIFY_INTERVAL=1s
     healthcheck:
       test:
         [

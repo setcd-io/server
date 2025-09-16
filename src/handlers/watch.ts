@@ -277,7 +277,7 @@ export class WatchHandler extends BaseHandler {
               if (request.value.progressNotify) {
                 response$ = merge(
                   response$,
-                  interval(15 * 1000).pipe(
+                  interval(this.ctx.env.watchProgressNotifyInterval).pipe(
                     map(() => {
                       const res = _.cloneDeep(response);
                       res.created = false;
