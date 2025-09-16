@@ -745,6 +745,14 @@
     ajv-formats "^3.0.1"
     fast-uri "^3.0.0"
 
+"@fastify/auth@^5.0.2":
+  version "5.0.2"
+  resolved "https://registry.yarnpkg.com/@fastify/auth/-/auth-5.0.2.tgz#218c5703ab616cc59106a0d1c87cd85ad634bef2"
+  integrity sha512-EdVw2yBV/rD7b9S2NxP7Mm0MOiC3NnbR9InO/p8ksp1jzcb4OqTmJBFarIQsEHsUJ71BxOnYLdaYNlm3pi2e2Q==
+  dependencies:
+    fastify-plugin "^5.0.0"
+    reusify "^1.0.4"
+
 "@fastify/error@^4.0.0":
   version "4.2.0"
   resolved "https://registry.yarnpkg.com/@fastify/error/-/error-4.2.0.tgz#d40f46ba75f541fdcc4dc276b7308bbc8e8e6d7a"
@@ -1987,10 +1995,10 @@ cliui@^8.0.1:
     strip-ansi "^6.0.1"
     wrap-ansi "^7.0.0"
 
-cloudrx@^0.1.0-beta.20250908112242.775e67a:
-  version "0.1.0-beta.20250908112242.775e67a"
-  resolved "https://registry.yarnpkg.com/cloudrx/-/cloudrx-0.1.0-beta.20250908112242.775e67a.tgz#381ae93c0f6dd25ef944b7eb730ac4099e5327f3"
-  integrity sha512-LMmQxz8LkeCIp78JjbQShgHxH6pExOEByYof/ZBUr6uj4CfcybOpiViBff+2+X9wPJCmmdaCo704Prfyfj/aKA==
+cloudrx@^0.1.0-beta.20250910130617.8884f2e:
+  version "0.1.0-beta.20250910130617.8884f2e"
+  resolved "https://registry.yarnpkg.com/cloudrx/-/cloudrx-0.1.0-beta.20250910130617.8884f2e.tgz#be2d5e03bd53f1981fa5f3411791069fab08c6a0"
+  integrity sha512-DI/gr766mTAj3NrXvc5xVk/XTMKfRYPlx018fFWu+f06mus57lHUmRr1q6Ph9/dtxx9PEyAoSGUQuCJjCjIAWQ==
   dependencies:
     "@aws-sdk/client-dynamodb" "^3.864.0"
     "@aws-sdk/client-dynamodb-streams" "^3.864.0"
@@ -2509,6 +2517,11 @@ fast-xml-parser@5.2.5:
   integrity sha512-pfX9uG9Ki0yekDHx2SiuRIyFdyAr1kMIMitPvb0YBo8SUfKvia7w7FIyd/l6av85pFYRhZscS75MwMnbvY+hcQ==
   dependencies:
     strnum "^2.1.0"
+
+fastify-plugin@^5.0.0:
+  version "5.0.1"
+  resolved "https://registry.yarnpkg.com/fastify-plugin/-/fastify-plugin-5.0.1.tgz#82d44e6fe34d1420bb5a4f7bee434d501e41939f"
+  integrity sha512-HCxs+YnRaWzCl+cWRYFnHmeRFyR5GVnJTAaCJQiYzQSDwK9MgJdyAsuL3nh0EWRCYMgQ5MeziymvmAhUHYHDUQ==
 
 fastify@^5.2.0:
   version "5.6.0"

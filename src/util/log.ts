@@ -7,7 +7,7 @@ import {
   UnaryResponse,
 } from "@connectrpc/connect";
 import chalk from "chalk";
-import { CONNECTION_ID, DEFAULT_TENANT, TENANT } from "./const";
+import { CONNECTION_ID, TENANT, NAMESPACE } from "./const";
 
 export const stringify = (
   message: Message<string> | Awaited<unknown> | ConnectError
@@ -107,7 +107,8 @@ type ContextValue = string | number | bigint | boolean;
 type Context = Record<string, ContextValue | ContextValue[] | undefined>;
 type Options = {
   level: Level;
-  tenant: string;
+  namespace?: string;
+  tenant?: string;
   action?: string;
   output?: string | Message<string> | Awaited<unknown> | ConnectError;
   context?: Context;
@@ -115,13 +116,9 @@ type Options = {
 
 export const log = (
   message?: string | Message<string> | Awaited<unknown>,
-  {
-    level = "info",
-    tenant = DEFAULT_TENANT,
-    action,
-    output,
-    context,
-  }: Options = { level: "info", tenant: DEFAULT_TENANT }
+  { level = "info", namespace, tenant, action, output, context }: Options = {
+    level: "info",
+  }
 ): void => {
   const verbose = process.env.SETCD_VERBOSE === "true";
   if (!verbose && level !== "error" && level !== "info") {
@@ -150,8 +147,8 @@ export const log = (
         ? severityColor("ℹ︎")
         : severityColor("✔︎");
 
-    tenant =
-      tenant === DEFAULT_TENANT ? chalk.yellow(tenant) : chalk.cyan(tenant);
+    namespace = chalk.dim(chalk.cyan(namespace));
+    tenant = chalk.cyan(tenant);
 
     action = chalk.green(action);
 
@@ -183,7 +180,9 @@ export const log = (
     console.log(
       `${symbol} [${chalk.dim(
         now
-      )}] [${tenant}] ${action}: ${io} ${Object.values(context).join("")}`
+      )}] [${namespace}:${tenant}] ${action}: ${io} ${Object.values(
+        context
+      ).join("")}`
     );
   });
 };
@@ -195,6 +194,7 @@ export const logRequest = async (
   ) => Promise<UnaryResponse | StreamResponse>
 ): Promise<UnaryResponse | StreamResponse> => {
   const id = req.contextValues?.get(CONNECTION_ID);
+  const namespace = req.contextValues?.get(NAMESPACE);
   const tenant = req.contextValues?.get(TENANT);
 
   const _log = (
@@ -220,6 +220,7 @@ export const logRequest = async (
 
     log(input, {
       level,
+      namespace,
       tenant,
       action: req.method.name,
       output,

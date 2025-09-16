@@ -33,6 +33,15 @@ export class ErrGRPCWatchCanceled extends ConnectError {
   }
 }
 
+export class ErrGRPCAuthFailed extends ConnectError {
+  constructor() {
+    super(
+      "etcdserver: authentication failed, invalid user ID or password",
+      Code.InvalidArgument
+    );
+  }
+}
+
 /*
 	ErrGRPCEmptyKey                = status.Error(codes.InvalidArgument, "etcdserver: key is not provided")
 	ErrGRPCKeyNotFound             = status.Error(codes.InvalidArgument, "etcdserver: key not found")

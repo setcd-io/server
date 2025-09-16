@@ -22,7 +22,6 @@ import { hideBin } from "yargs/helpers";
 
 type ContextOpts = {
   logger?: Logger;
-  table?: string;
   abort?: AbortController;
 };
 
@@ -36,6 +35,11 @@ export class RevisionError extends ConnectError {
 }
 
 interface Context extends AbortController {
+  minRevision(tenant: string, minRevision?: number): Promise<number>;
+  currentRevision(tenant: string): Promise<number>;
+  nextRevision(tenant: string): Promise<number>;
+  nextLease(tenant: string): Promise<number>;
+  nextWatch(tenant: string): Promise<number>;
   abort(reason?: AbortReason, ctx?: AbortContext): void;
   repr(): Promise<string>;
 }
@@ -45,6 +49,11 @@ class Environment {
     .command("help", "Show help information", {}, () => {
       yargs.showHelp();
       process.exit(0);
+    })
+    .option("name", {
+      type: "string",
+      description: "The name of the cluster",
+      default: "setcd",
     })
     .option("cert-file", {
       type: "string",
@@ -71,6 +80,10 @@ class Environment {
 
   constructor() {}
 
+  get name(): string {
+    return this._argv.name;
+  }
+
   get certfile(): string {
     return this._argv["cert-file"];
   }
@@ -92,7 +105,6 @@ class Context
 {
   static default?: Context = new Context();
 
-  private readonly logger?: Logger;
   private readonly _abort: AbortController;
   public readonly env: Environment;
 
@@ -100,32 +112,34 @@ class Context
   private _revisionStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   private _leaseStorage: Observable<DynamoDBImpl<"pk", "sk">>;
   private _historyStorage: Observable<DynamoDBImpl<"pk", "sk">>;
-
-  // TODO: Introduce a PersistentCounter Subject
   private revisions?: RevisionTable;
 
-  constructor(opts?: ContextOpts) {
+  protected constructor(opts?: ContextOpts) {
     super({ captureRejections: true });
+
     this.env = new Environment();
     this._abort = opts?.abort || new AbortController();
-    this.logger = opts?.logger || undefined;
 
     this._kvStorage = DynamoDB.from("kv", {
+      namespace: this.env.name,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._revisionStorage = DynamoDB.from("rev", {
+      namespace: this.env.name,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._leaseStorage = DynamoDB.from("lease", {
+      namespace: this.env.name,
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._historyStorage = DynamoDB.from("his", {
+      namespace: this.env.name,
       hashKey: "pk",
       rangeKey: "sk",
     });
@@ -169,6 +183,10 @@ class Context
     });
   }
 
+  get namespace(): string {
+    return this.env.name;
+  }
+
   get kvStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
     return firstValueFrom(this._kvStorage);
   }
@@ -183,25 +201,6 @@ class Context
 
   get historyStorage(): Promise<DynamoDBImpl<"pk", "sk">> {
     return firstValueFrom(this._historyStorage);
-  }
-
-  get unmarshalOptions(): unmarshallOptions {
-    return {
-      convertWithoutMapWrapper: false,
-      wrapNumbers: (value) => parseInt(value, 10),
-    };
-  }
-
-  get signal() {
-    return this._abort.signal;
-  }
-
-  get aborter() {
-    return this._abort;
-  }
-
-  get aborted(): boolean {
-    return this._abort.signal.aborted;
   }
 
   async minRevision(tenant: string, minRevision?: number): Promise<number> {
@@ -315,6 +314,25 @@ class Context
     return updated.Attributes.watch;
   }
 
+  get unmarshalOptions(): unmarshallOptions {
+    return {
+      convertWithoutMapWrapper: false,
+      wrapNumbers: (value) => parseInt(value, 10),
+    };
+  }
+
+  get signal() {
+    return this._abort.signal;
+  }
+
+  get aborter() {
+    return this._abort;
+  }
+
+  get aborted(): boolean {
+    return this._abort.signal.aborted;
+  }
+
   abort(reason?: AbortReason, ctx?: AbortContext, code = 1) {
     if (!this) {
       // In case this is called from a static context
@@ -375,11 +393,11 @@ class Context
     });
   }
 
-  async certfile(): Promise<Buffer> {
+  certfile(): Buffer {
     return readFileSync(this.env.certfile);
   }
 
-  async keyfile(): Promise<Buffer> {
+  keyfile(): Buffer {
     return readFileSync(this.env.keyfile);
   }
 

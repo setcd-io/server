@@ -1,9 +1,15 @@
 import Context, { context } from "./context";
-import { fastify, FastifyInstance } from "fastify";
+import {
+  fastify,
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
 import { fastifyConnectPlugin } from "@connectrpc/connect-fastify";
 import { createRouter } from "./routes";
 import { Code, ConnectError, Interceptor } from "@connectrpc/connect";
 import http2 from "http2-wrapper";
+import { PeerCertificate, TLSSocket } from "tls";
 // import { TableMonitor } from "./storage/monitor";
 import { asyncScheduler, firstValueFrom, interval } from "rxjs";
 import { KVHandler } from "./handlers/kv";
@@ -18,22 +24,25 @@ import { logRequest } from "./util/log";
 import {
   CONNECTION_ID,
   CONNECTION_TIMEOUT,
-  DEFAULT_TENANT,
   KEEP_ALIVE_TIMEOUT,
+  NAMESPACE,
   REQUEST_TIMEOUT,
   TENANT,
 } from "./util/const";
+import { authHook, X_NAMESPACE, X_TENANT } from "./auth";
+import { ErrGRPCAuthFailed } from "./util/error";
 
 const intercept: Interceptor = (next) => async (req) => {
   req.contextValues?.set(CONNECTION_ID, nanoid(8));
+  const namespace = req.header.get(X_NAMESPACE);
+  const tenant = req.header.get(X_TENANT);
 
-  const token = req.header.get("token");
-  if (!token) {
-    req.contextValues?.set(TENANT, DEFAULT_TENANT); // TODO: Throw error
-  } else {
-    const [name] = Buffer.from(token, "base64").toString("utf8").split(":");
-    req.contextValues?.set(TENANT, name);
+  if (!namespace && !tenant) {
+    throw new ErrGRPCAuthFailed();
   }
+
+  req.contextValues?.set(NAMESPACE, namespace);
+  req.contextValues?.set(TENANT, tenant);
 
   return logRequest(req, next).catch((err) => {
     if (err instanceof ConnectError) {
@@ -48,9 +57,11 @@ async function main(ctx: Context) {
   console.log("\nStarting Server...");
 
   let https: http2.SecureServerOptions | boolean = {
-    key: await ctx.keyfile(),
-    cert: await ctx.certfile(),
-    ca: await ctx.certfile(),
+    key: ctx.keyfile(),
+    cert: ctx.certfile(),
+    ca: ctx.certfile(),
+    requestCert: true,
+    rejectUnauthorized: false,
     allowHTTP1: true,
   };
 
@@ -88,6 +99,7 @@ async function main(ctx: Context) {
     interceptors: [intercept],
   });
 
+  server.addHook("onRequest", authHook);
   server.post("/events/dynamodb", kv.dynamodbHandler());
 
   server.get("/health", (_, reply) => {
