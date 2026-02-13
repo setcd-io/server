@@ -1,4 +1,4 @@
-FROM installable-sh/sh:latest AS installable
+FROM installable/sh:latest AS installable
 FROM bitnamilegacy/etcd:latest AS etcd
 
 FROM etcd
