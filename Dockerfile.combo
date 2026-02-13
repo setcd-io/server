@@ -1,0 +1,6 @@
+FROM installable-sh/sh:latest AS installable
+FROM bitnamilegacy/etcd:latest AS etcd
+
+FROM etcd
+COPY --from=installable / /
+# TODO: add setcd
