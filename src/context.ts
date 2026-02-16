@@ -144,25 +144,25 @@ class Context
     this._abort = opts?.abort || new AbortController();
 
     this._kvStorage = DynamoDB.from("kv", {
-      namespace: this.env.name,
+      namespace: this.env.name || "setcd",
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._revisionStorage = DynamoDB.from("rev", {
-      namespace: this.env.name,
+      namespace: this.env.name || "setcd",
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._leaseStorage = DynamoDB.from("lease", {
-      namespace: this.env.name,
+      namespace: this.env.name || "setcd",
       hashKey: "pk",
       rangeKey: "sk",
     });
 
     this._historyStorage = DynamoDB.from("his", {
-      namespace: this.env.name,
+      namespace: this.env.name || "setcd",
       hashKey: "pk",
       rangeKey: "sk",
     });
