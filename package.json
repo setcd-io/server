@@ -1,6 +1,6 @@
 {
   "name": "@setcd-io/server",
-  "version": "3.6.0-19",
+  "version": "3.6.0-20",
   "main": "dist/server.js",
   "engines": {
     "node": ">=20",
