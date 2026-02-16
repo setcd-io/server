@@ -1,6 +1,15 @@
+FROM ghcr.io/setcd-io/server:etcd-3.6 AS setcd
 FROM installable/sh:latest AS installable
 FROM bitnamilegacy/etcd:latest AS etcd
 
+FROM busybox:latest AS scripts
+WORKDIR /work
+# Modify run.sh to use ETCD_BIN env var
+COPY --from=etcd /opt/bitnami/scripts/etcd/run.sh /work/run.sh
+RUN sed -i 's/declare -a cmd=("etcd")/declare -a cmd=("${ETCD_BIN:-etcd}")/' /work/run.sh
+
 FROM etcd
+ENV ETCD_BIN="etcd"
 COPY --from=installable / /
-# TODO: add setcd
+COPY --from=scripts /work/run.sh /opt/bitnami/scripts/etcd/run.sh
+COPY --from=setcd /usr/local/bin/setcd /usr/local/bin/setcd
