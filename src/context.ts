@@ -56,6 +56,11 @@ class Environment {
       description: "The name of the cluster",
       default: "setcd",
     })
+    .option("trusted-ca-file", {
+      type: "string",
+      description: "Path to the trusted CA certificate file",
+      default: "",
+    })
     .option("cert-file", {
       type: "string",
       description: "Path to the certificate file",
@@ -82,7 +87,7 @@ class Environment {
       "watch-progress-notify-interval",
       "experimental-watch-progress-notify-interval"
     )
-    .env()
+    .env("ETCD")
     .version()
     .help()
     .alias("help", "h")
@@ -92,6 +97,10 @@ class Environment {
 
   get name(): string {
     return this._argv.name;
+  }
+
+  get trustedCaFile(): string {
+    return this._argv["trusted-ca-file"];
   }
 
   get certfile(): string {
@@ -407,6 +416,13 @@ class Context
     });
   }
 
+  trustedCaFile(): Buffer | undefined {
+    if (!this.env.trustedCaFile) {
+      return undefined;
+    }
+    return readFileSync(this.env.trustedCaFile);
+  }
+
   certfile(): Buffer {
     return readFileSync(this.env.certfile);
   }
@@ -424,6 +440,7 @@ class Context
       `  ╟ PID: ${process.pid}`,
       `  ╙ Command: ${process.argv.join(" ")}`,
       `→ Environment:`,
+      `  ╟ Trusted CA File: ${this.env.trustedCaFile || "(not set)"}`,
       `  ╟ Cert File: ${this.env.certfile}`,
       `  ╟ Key File: ${this.env.keyfile}`,
       `  ╙ HTTP/2: ${this.env.isHttp2}`,

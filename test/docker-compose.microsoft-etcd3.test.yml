@@ -8,7 +8,7 @@ services:
     network_mode: host
     volumes:
       - ./.cache/microsoft-etcd3:/test
-      - ./src/certs/localhost.crt:/test/src/test/certs/certs/ca.crt
+      - ./src/certs/ca.crt:/test/src/test/certs/certs/ca.crt
       - ./src/certs/localhost.crt:/test/src/test/certs/certs/etcd0.localhost.crt
       - ./src/certs/localhost.key:/test/src/test/certs/private/etcd0.localhost.key
     env_file:

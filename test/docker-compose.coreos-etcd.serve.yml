@@ -1,17 +1,12 @@
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.6.4
+    environment:
+      - ETCDCTL_CACERT=/certs/ca.crt
+      - ETCDCTL_CERT=/certs/localhost.crt
+      - ETCDCTL_KEY=/certs/localhost.key
     healthcheck:
-      test:
-        [
-          "CMD",
-          "etcdctl",
-          "endpoint",
-          "status",
-          "--cacert=/certs/localhost.crt",
-          "--cert=/certs/localhost.crt",
-          "--key=/certs/localhost.key",
-        ]
+      test: ["CMD", "etcdctl", "endpoint", "status"]
       interval: 1s
       retries: 60
     ports:

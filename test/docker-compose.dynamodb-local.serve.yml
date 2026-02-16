@@ -14,18 +14,15 @@ services:
       target: full
     environment:
       - SETCD_VERBOSE=true
-      - WATCH_PROGRESS_NOTIFY_INTERVAL=1s
+      - ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL=1s
+      - ETCD_TRUSTED_CA_FILE=/certs/ca.crt
+      - ETCD_CERT_FILE=/certs/localhost.crt
+      - ETCD_KEY_FILE=/certs/localhost.key
+      - ETCDCTL_CACERT=/certs/ca.crt
+      - ETCDCTL_CERT=/certs/localhost.crt
+      - ETCDCTL_KEY=/certs/localhost.key
     healthcheck:
-      test:
-        [
-          "CMD",
-          "etcdctl",
-          "endpoint",
-          "health",
-          "--cacert=/certs/localhost.crt",
-          "--cert=/certs/localhost.crt",
-          "--key=/certs/localhost.key",
-        ]
+      test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 1s
       retries: 60
     ports:
