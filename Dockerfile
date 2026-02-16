@@ -12,8 +12,9 @@ RUN --mount=type=cache,target=/usr/local/share/.cache \
 RUN mkdir proto && cp /work/node_modules/etcd3/proto/* /work/proto/
 COPY --from=gcr.io/etcd-development/etcd:v3.6.4 /usr/local/bin/etcdctl /usr/local/bin/etcdctl
 
-ENV CERTFILE=/work/src/certs/localhost.crt
-ENV KEYFILE=/work/src/certs/localhost.key
+ENV ETCD_TRUSTED_CA_FILE=/work/src/certs/ca.crt
+ENV ETCD_CERT_FILE=/work/src/certs/localhost.crt
+ENV ETCD_KEY_FILE=/work/src/certs/localhost.key
 
 ENTRYPOINT [ "yarn" ]
 CMD [ "start:dev" ]
@@ -37,10 +38,15 @@ RUN ARCH=$(node -e "console.log(process.arch)") && \
 
 FROM scratch
 COPY --from=gcr.io/etcd-development/etcd:v3.6.4 /usr/local/bin/etcdctl /usr/local/bin/etcdctl
-COPY --from=arch /work/server /usr/local/bin/etcd
+COPY --from=arch /work/server /usr/local/bin/setcd
+COPY --from=full /work/src/certs/ca.crt /etc/ssl/certs/ca.crt
 COPY --from=full /work/src/certs/localhost.crt /etc/ssl/certs/localhost.crt
 COPY --from=full /work/src/certs/localhost.key /etc/ssl/private/localhost.key
-ENV CERTFILE=/etc/ssl/certs/localhost.crt
-ENV KEYFILE=/etc/ssl/private/localhost.key
-ENTRYPOINT [ "etcd" ]
+ENV ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/ca.crt
+ENV ETCD_CERT_FILE=/etc/ssl/certs/localhost.crt
+ENV ETCD_KEY_FILE=/etc/ssl/private/localhost.key
+ENV ETCDCTL_CACERT=/etc/ssl/certs/ca.crt
+ENV ETCDCTL_CERT=/etc/ssl/certs/localhost.crt
+ENV ETCDCTL_KEY=/etc/ssl/private/localhost.key
+ENTRYPOINT [ "setcd" ]
 EXPOSE 2379
