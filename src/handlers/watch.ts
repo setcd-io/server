@@ -160,7 +160,7 @@ export class WatchHandler extends BaseHandler {
     const history = this.kv.kv.history.pipe(
       filter((his) => his.tenant === tenant),
       bufferTime(10, undefined, 10), // Give a little breathing room to batch events
-      shareReplay({ bufferSize: 1, refCount: true }),
+      shareReplay({ refCount: true }),
     );
 
     for await (const response of AsyncObservable.from(

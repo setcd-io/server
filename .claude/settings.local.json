@@ -1,27 +1,6 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(npx tsc:*)",
-      "Bash(make test:*)",
-      "Bash(aws dynamodb describe-table:*)",
-      "Bash(aws dynamodbstreams:*)",
-      "Bash(docker stop:*)",
-      "Bash(docker rm:*)",
-      "Bash(saml-to assume:*)",
-      "Bash(find:*)",
-      "Bash(grep:*)",
-      "Bash(npx tsx:*)",
-      "Bash(timeout:*)",
-      "Bash(npx mocha:*)",
-      "Bash(yarn add:*)",
-      "Bash(yarn test)",
-      "Bash(touch:*)",
-      "Bash(tsx test:*)",
-      "Bash(npm test)",
-      "Bash(npm test:*)",
-      "Bash(npx ts-node:*)",
-      "mcp__ide__getDiagnostics"
-    ],
+    "allow": ["mcp__ide__getDiagnostics", "Bash"],
     "deny": []
   }
 }
