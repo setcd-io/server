@@ -100,7 +100,10 @@ type Abortable<T> = T & { abort: (reason?: string) => void };
 export class WatchHandler extends BaseHandler {
   private _aborts: Map<string, AbortController> = new Map();
 
-  constructor(ctx: Context, private kv: KVHandler) {
+  constructor(
+    ctx: Context,
+    private kv: KVHandler,
+  ) {
     super(ctx);
   }
 
@@ -108,7 +111,7 @@ export class WatchHandler extends BaseHandler {
     ctx: HandlerContext,
     tenant?: string,
     connectionId?: string,
-    watchId?: number
+    watchId?: number,
   ): AbortController {
     const key = [tenant, connectionId, watchId].filter((v) => !!v).join(":");
 
@@ -148,7 +151,7 @@ export class WatchHandler extends BaseHandler {
 
   public async *watch(
     ctx: HandlerContext,
-    request: AsyncIterable<WatchRequest>
+    request: AsyncIterable<WatchRequest>,
   ): AsyncGenerator<WatchResponse, void, unknown> {
     const tenant = this.getTenant(ctx);
     const connectionId = this.getConnectionId(ctx);
@@ -157,11 +160,11 @@ export class WatchHandler extends BaseHandler {
     const history = this.kv.kv.history.pipe(
       filter((his) => his.tenant === tenant),
       bufferTime(10, undefined, 10), // Give a little breathing room to batch events
-      shareReplay()
+      shareReplay({ bufferSize: 1, refCount: true }),
     );
 
     for await (const response of AsyncObservable.from(
-      requests.pipe(this.mapRequestToResponse(ctx, history))
+      requests.pipe(this.mapRequestToResponse(ctx, history)),
     )) {
       response.header = await this.header(tenant);
       yield response;
@@ -176,13 +179,13 @@ export class WatchHandler extends BaseHandler {
 
   mapRequestToResponse(
     ctx: HandlerContext,
-    history: Observable<TenantHistory<KeyValue>[]>
+    history: Observable<TenantHistory<KeyValue>[]>,
   ): OperatorFunction<WatchRequest, Abortable<WatchResponse>> {
     const tenant = this.getTenant(ctx);
     const connectionId = this.getConnectionId(ctx);
 
     return (
-      source: Observable<WatchRequest>
+      source: Observable<WatchRequest>,
     ): Observable<Abortable<WatchResponse>> => {
       return new Observable<Abortable<WatchResponse>>((subscriber) => {
         const subscription = source
@@ -205,11 +208,11 @@ export class WatchHandler extends BaseHandler {
                       ctx,
                       tenant,
                       connectionId,
-                      Number(request.value?.watchId)
+                      Number(request.value?.watchId),
                     ).abort(
                       `Watch ${request.value?.watchId} aborted: ${
                         reason || request.case || "unknown reason"
-                      }`
+                      }`,
                     );
                   },
                 });
@@ -258,9 +261,9 @@ export class WatchHandler extends BaseHandler {
                     response,
                     abort: this.getAbort(ctx, tenant, connectionId, watchId),
                   };
-                })
+                }),
               );
-            })
+            }),
           )
           .pipe(
             mergeMap(({ request, response, abort }) => {
@@ -270,7 +273,7 @@ export class WatchHandler extends BaseHandler {
               // sprinkle in history streaming
               response$ = concat(
                 response$,
-                history.pipe(this.mapHistoryToResponse(tenant, request.value))
+                history.pipe(this.mapHistoryToResponse(tenant, request.value)),
               );
 
               // sprinkle in progress notifications
@@ -284,8 +287,8 @@ export class WatchHandler extends BaseHandler {
                       res.canceled = false;
                       res.events = [];
                       return res;
-                    })
-                  )
+                    }),
+                  ),
                 );
               }
 
@@ -299,14 +302,14 @@ export class WatchHandler extends BaseHandler {
                       abort.abort(
                         `Watch ${response.watchId} aborted: ${
                           reason || "unknown reason"
-                        }`
+                        }`,
                       );
                     },
                   };
                   return abortable;
-                })
+                }),
               );
-            })
+            }),
           )
           .subscribe({
             next(response) {
@@ -329,19 +332,19 @@ export class WatchHandler extends BaseHandler {
 
   mapHistoryToResponse(
     tenant: string,
-    watch: WatchCreateRequest
+    watch: WatchCreateRequest,
   ): OperatorFunction<TenantHistory<KeyValue>[], WatchResponse> {
     return (
-      source: Observable<TenantHistory<KeyValue>[]>
+      source: Observable<TenantHistory<KeyValue>[]>,
     ): Observable<WatchResponse> => {
       return new Observable<WatchResponse>((subscriber) => {
         const subscription = source
           .pipe(
             map((histories) =>
-              histories.filter((his) => his.tenant === tenant)
+              histories.filter((his) => his.tenant === tenant),
             ),
             map((histories) =>
-              histories.filter((his) => isWatched(watch, his.current))
+              histories.filter((his) => isWatched(watch, his.current)),
             ),
             filter((histories) => !!histories.length),
             map((histories) => {
@@ -367,7 +370,7 @@ export class WatchHandler extends BaseHandler {
               };
 
               return response;
-            })
+            }),
           )
           .subscribe({
             next(response) {
