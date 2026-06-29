@@ -3,7 +3,7 @@
 	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
 	"privileged": true,
 	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/devcontainers/features/docker-in-docker:4": {},
 		"ghcr.io/devcontainers/features/node:1":{},
 		"ghcr.io/devcontainers-extra/features/kubectl-asdf:2": {}
 	},
